@@ -1,0 +1,43 @@
+# Python-generated files
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.pyc
+build/
+dist/
+wheels/
+.eggs/
+*.egg
+*.egg-info
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Logs
+*.log
+
+# Test coverage
+coverage.xml
+.coverage
+htmlcov/
+
+# Temporary code / snip
+tmp/*
+
+# Exclude the samples directory containing large WAV files
+samples/*.wav
+
+# Exclude LLM stuff
+CLAUDE.md
+.cursorrules
+.cursor/

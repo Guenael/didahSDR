@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>didahSDR — Software Defined Radio for CW operators</title>
+    <link rel="stylesheet" href="css/dial.css">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div id="app-container">
+        <!-- 1. TOP BAR -->
+        <header id="top-bar">
+            <div class="top-bar-left">
+                <!-- Power button with I/O symbol -->
+                <button id="power-btn" class="power-btn active" title="Toggle Power / Waterfall / Audio" aria-label="Power">⏻</button>
+                <h1 class="app-title"><span class="title-di">di</span><span class="title-dah">dah</span><span class="title-sdr">SDR</span><span class="title-tagline"> — Software Defined Radio for CW operators</span></h1>
+
+                <!-- RX / TX Buttons -->
+                <div class="trx-group">
+                    <button id="rx-btn" class="trx-btn rx-btn active" title="Receiver Active">
+                        <span class="trx-led rx-led"></span>
+                        <span class="trx-label">RX</span>
+                    </button>
+                    <button id="tx-btn" class="trx-btn tx-btn" title="Transmitter (Inactive)" disabled>
+                        <span class="trx-led tx-led"></span>
+                        <span class="trx-label">TX</span>
+                    </button>
+                </div>
+                
+                <!-- Red Button / Badge: REPLAY MODE (Static Look) -->
+                <div class="replay-badge" title="Playing back recorded RF spectrum in a loop">
+                    <span class="replay-dot"></span>
+                    <span class="replay-text">REPLAY MODE</span>
+                </div>
+            </div>
+
+            <div class="top-bar-right">
+                <!-- S-Meter Toggle Button -->
+                <button id="smeter-btn" class="smeter-btn active" title="Toggle SNR S-Meter Window">
+                    <span class="smeter-icon">📶</span>
+                    <span>S-Meter</span>
+                </button>
+
+                <!-- Waterfall Config Window Toggle Button -->
+                <button id="wconfig-btn" class="smeter-btn" title="Toggle Waterfall Config Window">
+                    <span class="smeter-icon">🎚️</span>
+                    <span>W-Config</span>
+                </button>
+
+                <!-- Audio Start / Unmute Button for browser autoplay policies -->
+                <button id="audio-btn" class="audio-toggle-btn need-start" title="Audio Status (Click to start/mute)">
+                    <span id="audio-icon">🔊</span>
+                    <span id="audio-text">Start Audio</span>
+                </button>
+
+                <div class="status-badge">
+                    <span id="status-dot" class="status-dot"></span>
+                    <span id="status-text">Connecting...</span>
+                </div>
+                <div id="center-freq-badge" class="info-item">CF: 14.0480 MHz</div>
+                <div id="sample-rate-badge" class="info-item">SR: 96 kHz</div>
+                <div id="fps-badge" class="info-item">0 FPS</div>
+
+                <!-- Help Button -->
+                <button id="help-btn" class="help-btn" title="View Quick Guide & Shortcuts">? Help</button>
+            </div>
+        </header>
+
+        <!-- 2. HORIZONTAL WATERFALL (Right to Left) WITH RULER -->
+        <main id="waterfall-area"></main>
+
+        <!-- S-METER FLOATING WINDOW (SNR dB Above Noise Floor) -->
+        <div id="smeter-window" class="smeter-window" style="display: none;">
+            <div id="smeter-header" class="smeter-header">
+                <div class="smeter-title">
+                    <span class="smeter-drag-icon">⋮⋮</span>
+                    <span>S-METER · SNR dB</span>
+                </div>
+                <button id="smeter-close-btn" class="smeter-close-btn" title="Close S-Meter">✕</button>
+            </div>
+            <div class="smeter-body">
+                <div class="smeter-readout-row">
+                    <div class="smeter-val-group">
+                        <span id="smeter-val" class="smeter-val">+0.0</span>
+                        <span class="smeter-unit">dB</span>
+                    </div>
+                    <div class="smeter-peak-group">
+                        <span class="smeter-peak-label">PK:</span>
+                        <span id="smeter-peak-val" class="smeter-peak-val">+0.0 dB</span>
+                    </div>
+                    <div id="smeter-mode-badge" class="smeter-mode-badge">CW 150Hz</div>
+                </div>
+
+                <div class="smeter-meter-container">
+                    <div class="smeter-meter-track">
+                        <div id="smeter-bar" class="smeter-bar"></div>
+                        <div id="smeter-peak-needle" class="smeter-peak-needle"></div>
+                    </div>
+                    <div id="smeter-scale-container" class="smeter-scale-container"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- W-CONFIG FLOATING WINDOW (Waterfall settings) -->
+        <div id="wconfig-window" class="smeter-window wconfig-window" style="display: none;">
+            <div id="wconfig-header" class="smeter-header">
+                <div class="smeter-title">
+                    <span class="smeter-drag-icon">⋮⋮</span>
+                    <span>W-CONFIG · WATERFALL</span>
+                </div>
+                <button id="wconfig-close-btn" class="smeter-close-btn" title="Close W-Config">✕</button>
+            </div>
+            <div class="smeter-body wconfig-body">
+                <!-- Waterfall Min Level Slider (-160 to 0 dB) -->
+                <div class="control-group slider-container">
+                    <label for="min-lvl-slider">WF Min Level:</label>
+                    <input id="min-lvl-slider" type="range" min="-140" max="-20" step="1" value="-127" autocomplete="off">
+                    <span id="min-lvl-val" class="slider-val">-127 dB</span>
+                </div>
+
+                <!-- Waterfall Dynamic Range Slider (up to 120 dB) -->
+                <div class="control-group slider-container">
+                    <label for="dyn-range-slider">WF Dyn Range:</label>
+                    <input id="dyn-range-slider" type="range" min="20" max="120" step="1" value="60" autocomplete="off">
+                    <span id="dyn-range-val" class="slider-val">60 dB</span>
+                </div>
+
+                <!-- Waterfall Scroll Speed Slider (1x to 4x) -->
+                <div class="control-group slider-container">
+                    <label for="speed-slider">WF Speed:</label>
+                    <input id="speed-slider" type="range" min="1" max="4" step="1" value="3">
+                    <span id="speed-val" class="slider-val">3x</span>
+                </div>
+
+                <!-- Resolution/Separation (FFT Size) -->
+                <div class="control-group">
+                    <label for="fft-select">Resolution/Separation:</label>
+                    <select id="fft-select" class="select-input" title="Time vs Frequency resolution">
+                        <option value="1024">Separation</option>
+                        <option value="2048" selected>Balanced</option>
+                        <option value="4096">Resolution</option>
+                    </select>
+                </div>
+
+                <!-- Click Filter -->
+                <div class="control-group">
+                    <label for="kernel-select">Click Filter:</label>
+                    <select id="kernel-select" class="select-input" title="Key-Click Suppression & Sharpening Filter">
+                        <option value="off">Off</option>
+                        <option value="light">Light</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="strong">Strong</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3. BOTTOM PANEL: CONTROLS & INFORMATION -->
+        <footer id="bottom-panel">
+            <!-- Row 1: Frequency Dial, Modes, Step, and Theme -->
+            <div class="control-row">
+                <!-- Analog Mechanical Drum Frequency Dial (SDRangelove style) -->
+                <div class="control-group">
+                    <span class="group-label">VFO:</span>
+                    <div id="freq-dial-container"></div>
+                </div>
+
+                <!-- Demodulation Mode + Tuning Step -->
+                <div class="control-cluster">
+                    <div class="control-group">
+                        <span class="group-label">Mode:</span>
+                        <div class="btn-group">
+                            <button class="btn mode-btn active" data-mode="cw">CW</button>
+                            <button class="btn mode-btn" data-mode="usb">USB</button>
+                            <button class="btn mode-btn" data-mode="lsb">LSB</button>
+                        </div>
+                    </div>
+                    <div class="control-group">
+                        <span class="group-label">Step:</span>
+                        <select id="step-select" class="select-input" title="Tuning increment ratio">
+                            <option value="10">10 Hz</option>
+                            <option value="100" selected>100 Hz</option>
+                            <option value="500">500 Hz</option>
+                            <option value="1000">1 kHz</option>
+                            <option value="5000">5 kHz</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Colormap Theme Selector -->
+                <div class="control-group">
+                    <span class="group-label">Colormap:</span>
+                    <select id="theme-select" class="select-input"></select>
+                </div>
+            </div>
+
+            <!-- Row 2: Volume, CW BFO / BW, AGC and CW Filter -->
+            <div class="control-row">
+                <!-- Audio: Volume + AGC -->
+                <div class="control-cluster">
+                    <div class="control-group slider-container">
+                        <label for="vol-slider">Volume:</label>
+                        <input id="vol-slider" type="range" min="0" max="1" step="0.01" value="0.8">
+                        <span id="vol-val" class="slider-val">80%</span>
+                    </div>
+                    <div class="control-group">
+                        <span class="group-label">AGC:</span>
+                        <select id="agc-select" class="select-input" title="AGC Response Speed">
+                            <option value="fast">Fast</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="slow">Slow</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- CW: BFO pitch + Bandwidth -->
+                <div class="control-cluster">
+                    <div class="control-group slider-container" id="cw-offset-container">
+                        <label for="cw-offset-slider">CW BFO:</label>
+                        <input id="cw-offset-slider" type="range" min="400" max="1000" step="10" value="700">
+                        <span id="cw-offset-val" class="slider-val">700 Hz</span>
+                    </div>
+                    <div class="control-group slider-container" id="cw-bw-container">
+                        <label for="cw-bw-slider">CW BW:</label>
+                        <input id="cw-bw-slider" type="range" min="50" max="350" step="10" value="150">
+                        <span id="cw-bw-val" class="slider-val">150 Hz</span>
+                    </div>
+                </div>
+
+                <!-- CW Filter -->
+                <div class="control-group">
+                    <button id="cw-filter-toggle" class="toggle-btn active" title="Toggle CW Adaptive IIR Noise Squelch & Sharpening">CW Filter: ON</button>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <!-- 4. HELP & SHORTCUTS MODAL DIALOG -->
+    <div id="help-modal" class="modal-overlay hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2>didahSDR - Quick Guide & Shortcuts</h2>
+                <button id="help-close-btn" class="modal-close-btn" title="Close">✕</button>
+            </div>
+            <div class="modal-body">
+                <section class="help-section">
+                    <h3>UI overall principles</h3>
+                    <p class="help-text">
+                        didahSDR focuses on using the mouse to navigate the waterfall and quickly select frequencies.
+                    </p>
+                </section>
+
+                <section class="help-section">
+                    <h3>Mouse behaviours</h3>
+                    <ul>
+                        <li><strong>Mouse Wheel:</strong> Move the VFO up and down according to the frequency step selected.</li>
+                        <li><strong>CTRL + Mouse Wheel:</strong> Zoom the waterfall, centred on the cursor.</li>
+                        <li><strong>SHIFT + Mouse Wheel:</strong> Move the waterfall up and down.</li>
+                        <li><strong>Left Click on Waterfall:</strong> Move the VFO to the selected frequency (hold and drag to track).</li>
+                        <li><strong>Left Click on the Ruler:</strong> Drag to move the waterfall up and down.</li>
+                    </ul>
+                </section>
+
+                <section class="help-section">
+                    <h3>Keyboard Shortcuts</h3>
+                    <div class="shortcuts-grid">
+                        <div><kbd>Space</kbd></div><div>Toggle Power (Pause/Resume)</div>
+                        <div><kbd>M</kbd></div><div>Cycle Mode (CW &rarr; USB &rarr; LSB)</div>
+                        <div><kbd>&uarr;</kbd> / <kbd>&darr;</kbd></div><div>Step VFO Frequency Up / Down (according to the step selected)</div>
+                        <div><kbd>&larr;</kbd> / <kbd>&rarr;</kbd></div><div>Waterfall Zoom Out / In</div>
+                        <div><kbd>Home</kbd> / <kbd>End</kbd></div><div>Zoom Min / Zoom Max</div>
+                        <div><kbd>+</kbd> / <kbd>-</kbd></div><div>Change the step (10 Hz &rarr; 5 kHz)</div>
+                        <div><kbd>Esc</kbd></div><div>Close this Help dialog</div>
+                    </div>
+                </section>
+
+                <section class="help-section">
+                    <h3>Analog Mechanical Drum Dial (VFO)</h3>
+                    <ul>
+                        <li><strong>Hover + Mouse Wheel:</strong> Roll any individual digit drum up or down.</li>
+                        <li><strong>Left Click on a digit:</strong> Selects the digit cursor. Use <code>Arrow Up/Down</code> to spin the drum or type digits <code>0-9</code>.</li>
+                        <li><strong>Right Click on a digit:</strong> Zeroes out all digits to the right (convenient rounding tool).</li>
+                    </ul>
+                </section>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/modes.js"></script>
+    <script src="js/colormaps.js"></script>
+    <script src="js/cw_filter.js"></script>
+    <script src="js/fft.js"></script>
+    <script src="js/agc.js"></script>
+    <script src="js/demodulator.js"></script>
+    <script src="js/floating_window.js"></script>
+    <script src="js/value_dial.js"></script>
+    <script src="js/waterfall.js"></script>
+    <script src="js/audio.js"></script>
+    <script src="js/smeter.js"></script>
+    <script src="js/connection.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
