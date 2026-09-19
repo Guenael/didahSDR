@@ -41,3 +41,5 @@ samples/*.wav
 CLAUDE.md
 .cursorrules
 .cursor/
+app/lib/
+app/models/*.onnx

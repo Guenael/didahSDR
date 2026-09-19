@@ -285,7 +285,16 @@ def create_app(wav_path: str, static_dir: Path, center_freq: int, fps: int):
     looper = WavIQLooper(wav_path)
     server = DidahServer(looper, static_dir, center_freq=center_freq, fps=fps)
 
-    app = web.Application()
+    @web.middleware
+    async def isolation_headers(request, handler):
+        # Cross-origin isolation lets onnxruntime-web use SharedArrayBuffer (multi-threaded WASM) in the
+        # CW decoder worker. WebSockets to external Kiwi servers are unaffected by COEP.
+        response = await handler(request)
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
+        return response
+
+    app = web.Application(middlewares=[isolation_headers])
     app["server"] = server
     app.cleanup_ctx.append(start_background_tasks)
 
@@ -301,6 +310,10 @@ def create_app(wav_path: str, static_dir: Path, center_freq: int, fps: int):
     # Static assets
     app.router.add_static("/css", static_dir / "css")
     app.router.add_static("/js", static_dir / "js")
+    # CW decoder assets: vendored onnxruntime-web (scripts/fetch_ort.sh) and the exported model
+    for name in ("lib", "models"):
+        if (static_dir / name).is_dir():
+            app.router.add_static(f"/{name}", static_dir / name)
 
     return app
 

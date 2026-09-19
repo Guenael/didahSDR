@@ -48,6 +48,12 @@
                     <span>Config</span>
                 </button>
 
+                <!-- CW Decoder Window Toggle Button -->
+                <button id="decoder-btn" class="smeter-btn" title="Toggle CW Decoder Window">
+                    <span class="smeter-icon">🔤</span>
+                    <span>Decoder</span>
+                </button>
+
                 <!-- Audio Start / Unmute Button for browser autoplay policies -->
                 <button id="audio-btn" class="audio-toggle-btn need-start" title="Audio Status (Click to start/mute)">
                     <span id="audio-icon">🔊</span>
@@ -179,6 +185,25 @@
         </div>
 
         <!-- SOURCE FLOATING WINDOW (IQ WebSocket selector) -->
+        <!-- CW DECODER FLOATING WINDOW (neural decoder, see js/cw_decoder.js) -->
+        <div id="decoder-window" class="smeter-window decoder-window" style="display: none;">
+            <div id="decoder-header" class="smeter-header">
+                <div class="smeter-title">
+                    <span class="smeter-drag-icon">⋮⋮</span>
+                    <span>CW DECODER</span>
+                    <span id="decoder-status" class="cwd-status cwd-status-off">OFF</span>
+                </div>
+                <div class="cwd-header-btns">
+                    <button id="decoder-clear-btn" class="cwd-clear-btn" title="Clear transcript">CLR</button>
+                    <button id="decoder-close-btn" class="smeter-close-btn" title="Close Decoder">✕</button>
+                </div>
+            </div>
+            <div class="smeter-body">
+                <div id="decoder-output" class="cwd-output"></div>
+                <div class="cwd-hint">CW mode only · tune the carrier onto the cursor</div>
+            </div>
+        </div>
+
         <div id="source-window" class="smeter-window source-window" style="display: none;">
             <div id="source-header" class="smeter-header">
                 <div class="smeter-title">
@@ -382,6 +407,7 @@
     <script src="js/waterfall.js"></script>
     <script src="js/audio.js"></script>
     <script src="js/smeter.js"></script>
+    <script src="js/cw_decoder.js"></script>
     <script src="js/connection.js"></script>
     <script src="js/sources.js"></script>
     <script src="js/kiwi.js"></script>

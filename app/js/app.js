@@ -48,6 +48,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 3. Initialize Client-Side Demodulator with AGC
     const demodulator = new DidahDemodulator(state.sampleRate, 48000);
+
+    // Neural CW decoder (worker + ONNX). Runs only while its window is open and the mode is CW.
+    const cwDecoder = new CWDecoder(demodulator, {
+        output: document.getElementById('decoder-output'),
+        status: document.getElementById('decoder-status')
+    });
+    let decoderWindowVisible = false;
+    function updateDecoderActive() {
+        if (decoderWindowVisible && state.modulation === 'cw') cwDecoder.start(demodulator.audioRate);
+        else cwDecoder.stop();
+    }
     demodulator.setAgcSpeed(state.agcSpeed);
     demodulator.setCwBandwidth(state.cwBandwidth);
     demodulator.setBfoPitch(state.cwOffset);
@@ -198,6 +209,8 @@ document.addEventListener('DOMContentLoaded', () => {
         state.sampleRate = rate;
         demodulator.setIqRate(rate);
         audioPlayer.setInputRate(demodulator.audioRate);
+        cwDecoder.setRate(demodulator.audioRate);
+        cwDecoder.reset();
         resetIqPipeline();
         waterfall.setCenterFreq(state.centerFreq, rate);
         if (rate < 30000) waterfall.zoomMin();
@@ -347,6 +360,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         waterfall.setTunedFreq(state.tunedFreq, state.lowCut, state.highCut, state.modulation);
+        cwDecoder.reset();
         sendDspControl();
     }
 
@@ -386,6 +400,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         setTunedFrequency(state.tunedFreq, false, false);
         smeter.setModeInfo(state.modulation, state.cwBandwidth);
+        updateDecoderActive();
     }
 
     function updateTopBarInfo() {
@@ -592,6 +607,16 @@ document.addEventListener('DOMContentLoaded', () => {
         toggleBtnId: 'source-btn', storageKey: 'didah_source', defaultVisible: false,
         defaultPos: { top: '58px', left: '20px', right: 'auto' }
     });
+
+    // CW decoder window: the decoder only runs while it is visible
+    setupFloatingWindow({
+        windowId: 'decoder-window', headerId: 'decoder-header', closeBtnId: 'decoder-close-btn',
+        toggleBtnId: 'decoder-btn', storageKey: 'didah_decoder', defaultVisible: false,
+        defaultPos: { top: '400px', left: '20px', right: 'auto' },
+        onVisibilityChange: (visible) => { decoderWindowVisible = visible; updateDecoderActive(); }
+    });
+    const decoderClearBtn = document.getElementById('decoder-clear-btn');
+    if (decoderClearBtn) decoderClearBtn.addEventListener('click', () => cwDecoder.clear());
 
     // 5. Tuning Step Selector (also driven by the + / - keys)
     const stepSelect = document.getElementById('step-select');

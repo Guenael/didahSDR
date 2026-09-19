@@ -10,6 +10,7 @@
  *                 opposite sideband, is gone after this stage. This is the sideband selection.
  *   4. BFO      : rotate by +pitch (CW) or the SSB passband centre (USB +, LSB −) and take Re().
  *   5. AGC (in place).
+ *   A tap on the stage-3 output (complex, pre-BFO, pre-AGC) feeds the CW decoder (cw_decoder.js).
  *
  * Image rejection is set by the channel filter stopband (~60 dB), not by IQ balance tricks.
  * No allocations per packet.
@@ -121,6 +122,12 @@ class DidahDemodulator {
         // Output buffer, reused across calls (re-allocated only if the packet size changes)
         this.audioOut = new Float32Array(0);
 
+        // Optional tap on the channel-filtered complex baseband (before BFO / Re() / AGC), used by the
+        // CW decoder. Called once per packet as tapCallback(i, q, n) with pre-allocated buffers.
+        this.tapCallback = null;
+        this.tapI = new Float32Array(0);
+        this.tapQ = new Float32Array(0);
+
         this.updateFilters();
     }
 
@@ -217,8 +224,13 @@ class DidahDemodulator {
         const numComplex = int16IQ.length / 2;
         const decim = this.decimate2;
         const outLen = decim ? numComplex >> 1 : numComplex;
-        if (this.audioOut.length !== outLen) this.audioOut = new Float32Array(outLen);
+        if (this.audioOut.length !== outLen) {
+            this.audioOut = new Float32Array(outLen);
+            this.tapI = new Float32Array(outLen);
+            this.tapQ = new Float32Array(outLen);
+        }
         const out = this.audioOut;
+        const tapI = this.tapI, tapQ = this.tapQ;
 
         const halfband = this.halfband;
         const channel = this.channel;
@@ -255,6 +267,8 @@ class DidahDemodulator {
                 channel.push(halfband.outI, halfband.outQ);
             }
             channel.compute();
+            tapI[o] = channel.outI;
+            tapQ[o] = channel.outQ;
             out[o] = channel.outI * Math.cos(bfoPhase) - channel.outQ * Math.sin(bfoPhase);
             bfoPhase += bfoStep;
             if (bfoPhase > TWO_PI) bfoPhase -= TWO_PI;
@@ -265,6 +279,7 @@ class DidahDemodulator {
         this.ncoPhase = ncoPhase;
         this.bfoPhase = bfoPhase;
 
+        if (this.tapCallback) this.tapCallback(tapI, tapQ, outLen);
         return this.agc.process(out);
     }
 }
