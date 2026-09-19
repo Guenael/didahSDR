@@ -10,9 +10,10 @@ const fs = require('fs');
 const JS = path.resolve(__dirname, '../../app/js');
 const req = (name) => require(path.join(JS, name));
 
-const { MODES, WATERFALL_DB_FLOOR } = req('modes.js');
+const { MODES, WATERFALL_DB_FLOOR, setSsbPassband } = req('modes.js');
 global.MODES = MODES;
 global.WATERFALL_DB_FLOOR = WATERFALL_DB_FLOOR;
+global.setSsbPassband = setSsbPassband;
 global.Colormaps = req('colormaps.js');
 global.CWAdaptiveFilter = req('cw_filter.js');
 global.DidahFFT = req('fft.js');

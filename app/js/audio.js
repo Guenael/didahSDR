@@ -126,7 +126,7 @@ class WebAudioPlayer {
     }
 
     /**
-     * Push 48 kHz Float32 mono audio into the worklet's jitter buffer.
+     * Push Float32 mono audio (demodulator output rate) into the worklet's jitter buffer.
      * The array is copied (the demodulator reuses its output buffer) and the copy is transferred.
      * @param {Float32Array} floatArray - Mono audio samples [-1.0, 1.0]
      */
@@ -136,6 +136,16 @@ class WebAudioPlayer {
         if (floatArray.length === 0) return;
         const copy = new Float32Array(floatArray);
         this.node.port.postMessage(copy, [copy.buffer]);
+    }
+
+    /** Tell the worklet the demodulator output rate (48 kHz replay, ~12 kHz Kiwi). */
+    setInputRate(rate) {
+        this.INPUT_RATE = Math.max(1000, rate);
+        if (this.node) this.node.port.postMessage({ type: 'inputRate', rate: this.INPUT_RATE });
+    }
+
+    resetBuffer() {
+        if (this.node) this.node.port.postMessage({ type: 'reset' });
     }
 
     stop() {

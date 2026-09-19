@@ -28,11 +28,11 @@
                     </button>
                 </div>
                 
-                <!-- Red Button / Badge: REPLAY MODE (Static Look) -->
-                <div class="replay-badge" title="Playing back recorded RF spectrum in a loop">
-                    <span class="replay-dot"></span>
-                    <span class="replay-text">REPLAY MODE</span>
-                </div>
+                <!-- Source selector (replay / live Kiwi) -->
+                <button id="source-btn" class="smeter-btn" title="Select IQ source">
+                    <span class="smeter-icon">📡</span>
+                    <span>Source</span>
+                </button>
             </div>
 
             <div class="top-bar-right">
@@ -42,10 +42,10 @@
                     <span>S-Meter</span>
                 </button>
 
-                <!-- Waterfall Config Window Toggle Button -->
-                <button id="wconfig-btn" class="smeter-btn" title="Toggle Waterfall Config Window">
+                <!-- Config Window Toggle Button -->
+                <button id="wconfig-btn" class="smeter-btn" title="Toggle Config Window">
                     <span class="smeter-icon">🎚️</span>
-                    <span>W-Config</span>
+                    <span>Config</span>
                 </button>
 
                 <!-- Audio Start / Unmute Button for browser autoplay policies -->
@@ -102,57 +102,121 @@
             </div>
         </div>
 
-        <!-- W-CONFIG FLOATING WINDOW (Waterfall settings) -->
+        <!-- CONFIG FLOATING WINDOW (Waterfall, CW, USB/LSB) -->
         <div id="wconfig-window" class="smeter-window wconfig-window" style="display: none;">
             <div id="wconfig-header" class="smeter-header">
                 <div class="smeter-title">
                     <span class="smeter-drag-icon">⋮⋮</span>
-                    <span>W-CONFIG · WATERFALL</span>
+                    <span>CONFIG</span>
                 </div>
-                <button id="wconfig-close-btn" class="smeter-close-btn" title="Close W-Config">✕</button>
+                <button id="wconfig-close-btn" class="smeter-close-btn" title="Close Config">✕</button>
             </div>
             <div class="smeter-body wconfig-body">
-                <!-- Waterfall Min Level Slider (-160 to 0 dB) -->
-                <div class="control-group slider-container">
-                    <label for="min-lvl-slider">WF Min Level:</label>
-                    <input id="min-lvl-slider" type="range" min="-140" max="-20" step="1" value="-127" autocomplete="off">
-                    <span id="min-lvl-val" class="slider-val">-127 dB</span>
+                <div class="wconfig-section">
+                    <div class="wconfig-section-title">WATERFALL</div>
+                    <div class="control-group slider-container">
+                        <label for="min-lvl-slider">WF Min Level:</label>
+                        <input id="min-lvl-slider" type="range" min="-140" max="-20" step="1" value="-127" autocomplete="off">
+                        <span id="min-lvl-val" class="slider-val">-127 dB</span>
+                    </div>
+                    <div class="control-group slider-container">
+                        <label for="dyn-range-slider">WF Dyn Range:</label>
+                        <input id="dyn-range-slider" type="range" min="20" max="120" step="1" value="60" autocomplete="off">
+                        <span id="dyn-range-val" class="slider-val">60 dB</span>
+                    </div>
+                    <div class="control-group slider-container">
+                        <label for="speed-slider">WF Speed:</label>
+                        <input id="speed-slider" type="range" min="1" max="6" step="1" value="3">
+                        <span id="speed-val" class="slider-val">3x</span>
+                    </div>
+                    <div class="control-group">
+                        <label for="fft-select">Resolution/Separation:</label>
+                        <select id="fft-select" class="select-input" title="Time vs Frequency resolution">
+                            <option value="1024">Separation</option>
+                            <option value="2048" selected>Balanced</option>
+                            <option value="4096">Resolution</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="kernel-select">Click Filter:</label>
+                        <select id="kernel-select" class="select-input" title="Key-Click Suppression & Sharpening Filter">
+                            <option value="off">Off</option>
+                            <option value="light">Light</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="strong">Strong</option>
+                        </select>
+                    </div>
                 </div>
 
-                <!-- Waterfall Dynamic Range Slider (up to 120 dB) -->
-                <div class="control-group slider-container">
-                    <label for="dyn-range-slider">WF Dyn Range:</label>
-                    <input id="dyn-range-slider" type="range" min="20" max="120" step="1" value="60" autocomplete="off">
-                    <span id="dyn-range-val" class="slider-val">60 dB</span>
+                <div class="wconfig-section" id="cw-config-section">
+                    <div class="wconfig-section-title">CW</div>
+                    <div class="control-group slider-container" id="cw-offset-container">
+                        <label for="cw-offset-slider">CW BFO:</label>
+                        <input id="cw-offset-slider" type="range" min="400" max="1000" step="10" value="700">
+                        <span id="cw-offset-val" class="slider-val">700 Hz</span>
+                    </div>
+                    <div class="control-group slider-container" id="cw-bw-container">
+                        <label for="cw-bw-slider">CW BW:</label>
+                        <input id="cw-bw-slider" type="range" min="50" max="350" step="10" value="150">
+                        <span id="cw-bw-val" class="slider-val">150 Hz</span>
+                    </div>
                 </div>
 
-                <!-- Waterfall Scroll Speed Slider (1x to 4x) -->
-                <div class="control-group slider-container">
-                    <label for="speed-slider">WF Speed:</label>
-                    <input id="speed-slider" type="range" min="1" max="4" step="1" value="3">
-                    <span id="speed-val" class="slider-val">3x</span>
+                <div class="wconfig-section is-dimmed" id="ssb-config-section">
+                    <div class="wconfig-section-title">USB / LSB</div>
+                    <div class="control-group slider-container">
+                        <label for="ssb-low-slider">Low:</label>
+                        <input id="ssb-low-slider" type="range" min="50" max="1000" step="10" value="200">
+                        <span id="ssb-low-val" class="slider-val">200 Hz</span>
+                    </div>
+                    <div class="control-group slider-container">
+                        <label for="ssb-high-slider">High:</label>
+                        <input id="ssb-high-slider" type="range" min="800" max="4000" step="10" value="2700">
+                        <span id="ssb-high-val" class="slider-val">2700 Hz</span>
+                    </div>
                 </div>
+            </div>
+        </div>
 
-                <!-- Resolution/Separation (FFT Size) -->
-                <div class="control-group">
-                    <label for="fft-select">Resolution/Separation:</label>
-                    <select id="fft-select" class="select-input" title="Time vs Frequency resolution">
-                        <option value="1024">Separation</option>
-                        <option value="2048" selected>Balanced</option>
-                        <option value="4096">Resolution</option>
-                    </select>
+        <!-- SOURCE FLOATING WINDOW (IQ WebSocket selector) -->
+        <div id="source-window" class="smeter-window source-window" style="display: none;">
+            <div id="source-header" class="smeter-header">
+                <div class="smeter-title">
+                    <span class="smeter-drag-icon">⋮⋮</span>
+                    <span>SOURCE · IQ STREAM</span>
                 </div>
-
-                <!-- Click Filter -->
-                <div class="control-group">
-                    <label for="kernel-select">Click Filter:</label>
-                    <select id="kernel-select" class="select-input" title="Key-Click Suppression & Sharpening Filter">
-                        <option value="off">Off</option>
-                        <option value="light">Light</option>
-                        <option value="medium" selected>Medium</option>
-                        <option value="strong">Strong</option>
-                    </select>
+                <button id="source-close-btn" class="smeter-close-btn" title="Close Source">✕</button>
+            </div>
+            <div class="smeter-body source-body">
+                <label class="source-option">
+                    <input type="radio" name="iq-source" value="va2gka" checked>
+                    <span class="source-option-text">
+                        <span class="source-option-label">VA2GKA Replay</span>
+                        <span class="source-option-meta">96 kHz · 14.048 MHz · local /ws</span>
+                    </span>
+                </label>
+                <div class="source-option source-option-kiwi">
+                    <label class="source-option-head">
+                        <input type="radio" name="iq-source" value="f4kiy">
+                        <span class="source-option-text">
+                            <span class="source-option-label">KiwiSDR Live</span>
+                            <span class="source-option-meta">12 kHz IQ · paste the receiver URL</span>
+                        </span>
+                    </label>
+                    <div class="source-kiwi-fields">
+                        <div class="source-kiwi-row">
+                            <input type="text" id="kiwi-url" class="source-url-input" value="http://f4kiy.ddns.net:8073"
+                                   spellcheck="false" autocomplete="off" autocapitalize="off" inputmode="url"
+                                   placeholder="http://f4kiy.ddns.net:8073" aria-label="KiwiSDR URL">
+                            <button type="button" id="kiwi-connect-btn" class="source-connect-btn" title="Connect to this KiwiSDR">Connect</button>
+                        </div>
+                        <p id="kiwi-url-hint" class="source-url-hint">
+                            Example: <code>http://f4kiy.ddns.net:8073</code>.
+                            <code>http://</code> or <code>https://</code> is stripped; host and port are used for the SND stream.
+                        </p>
+                    </div>
                 </div>
+                <p id="source-status" class="source-status">didah 0x03 IQ · 96 kHz · CF 14.0480 MHz.</p>
             </div>
         </div>
 
@@ -195,7 +259,7 @@
                 </div>
             </div>
 
-            <!-- Row 2: Volume, CW BFO / BW, AGC and CW Filter -->
+            <!-- Row 2: Volume, AGC, CW Filter, QRSS -->
             <div class="control-row">
                 <!-- Audio: Volume + AGC -->
                 <div class="control-cluster">
@@ -214,23 +278,14 @@
                     </div>
                 </div>
 
-                <!-- CW: BFO pitch + Bandwidth -->
+                <!-- CW Filter + QRSS -->
                 <div class="control-cluster">
-                    <div class="control-group slider-container" id="cw-offset-container">
-                        <label for="cw-offset-slider">CW BFO:</label>
-                        <input id="cw-offset-slider" type="range" min="400" max="1000" step="10" value="700">
-                        <span id="cw-offset-val" class="slider-val">700 Hz</span>
+                    <div class="control-group">
+                        <button id="cw-filter-toggle" class="toggle-btn active" title="Toggle CW Adaptive IIR Noise Squelch & Sharpening">CW Filter: ON</button>
                     </div>
-                    <div class="control-group slider-container" id="cw-bw-container">
-                        <label for="cw-bw-slider">CW BW:</label>
-                        <input id="cw-bw-slider" type="range" min="50" max="350" step="10" value="150">
-                        <span id="cw-bw-val" class="slider-val">150 Hz</span>
+                    <div class="control-group">
+                        <button id="qrss-toggle" class="toggle-btn" title="Slow waterfall: Blackman window and averaged FFT bins. WF Speed sets integration time.">QRSS: OFF</button>
                     </div>
-                </div>
-
-                <!-- CW Filter -->
-                <div class="control-group">
-                    <button id="cw-filter-toggle" class="toggle-btn active" title="Toggle CW Adaptive IIR Noise Squelch & Sharpening">CW Filter: ON</button>
                 </div>
             </div>
         </footer>
@@ -252,11 +307,31 @@
                 </section>
 
                 <section class="help-section">
+                    <h3>IQ sources</h3>
+                    <p class="help-text">
+                        Open the Source window to switch between VA2GKA Replay (local 96 kHz recording)
+                        and a live KiwiSDR (12 kHz IQ). Paste the receiver web address, for example
+                        <code>http://f4kiy.ddns.net:8073</code>. On live Kiwi the waterfall is a
+                        12 kHz zoom; tuning past the edges or Shift+wheel / ruler-drag slides the Kiwi DDC.
+                    </p>
+                </section>
+
+                <section class="help-section">
+                    <h3>Config</h3>
+                    <p class="help-text">
+                        Open Config for waterfall levels, WF Speed (1x–6x STFT overlap), CW BFO/BW,
+                        and USB/LSB low/high (default 200–2700 Hz). QRSS (next to CW Filter) switches
+                        the FFT to a Blackman window and averages successive spectra so slow Morse
+                        stands out; WF Speed then sets how long each column integrates.
+                    </p>
+                </section>
+
+                <section class="help-section">
                     <h3>Mouse behaviours</h3>
                     <ul>
                         <li><strong>Mouse Wheel:</strong> Move the VFO up and down according to the frequency step selected.</li>
                         <li><strong>CTRL + Mouse Wheel:</strong> Zoom the waterfall, centred on the cursor.</li>
-                        <li><strong>SHIFT + Mouse Wheel:</strong> Move the waterfall up and down.</li>
+                        <li><strong>SHIFT + Mouse Wheel:</strong> Move the waterfall up and down (on live Kiwi this slides the 12 kHz DDC).</li>
                         <li><strong>Left Click on Waterfall:</strong> Move the VFO to the selected frequency (hold and drag to track).</li>
                         <li><strong>Left Click on the Ruler:</strong> Drag to move the waterfall up and down.</li>
                     </ul>
@@ -283,6 +358,14 @@
                         <li><strong>Right Click on a digit:</strong> Zeroes out all digits to the right (convenient rounding tool).</li>
                     </ul>
                 </section>
+
+                <section class="help-section">
+                    <h3>Licence</h3>
+                    <p class="help-text">
+                        didahSDR is free software under the GNU Affero General Public License v3 or later.
+                        The full text is in the project <code>LICENSE</code> file.
+                    </p>
+                </section>
             </div>
         </div>
     </div>
@@ -300,6 +383,8 @@
     <script src="js/audio.js"></script>
     <script src="js/smeter.js"></script>
     <script src="js/connection.js"></script>
+    <script src="js/sources.js"></script>
+    <script src="js/kiwi.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

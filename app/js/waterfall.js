@@ -80,6 +80,7 @@ class HorizontalWaterfall {
         this.renderFrameCount = 0;
         this.onFpsCallback = null;
         this.onTuneCallback = null;
+        this.onPanCallback = null;
 
         this.initDOM();
         this.initRenderer();
@@ -660,7 +661,12 @@ class HorizontalWaterfall {
     panByPixels(dy) {
         if (!this.wfHeight) return;
         const span = this.sampleRate / this.zoom;
-        this.panOffset += (dy / this.wfHeight) * span;
+        const deltaHz = (dy / this.wfHeight) * span;
+        if (this.onPanCallback) {
+            this.onPanCallback(deltaHz);
+            return;
+        }
+        this.panOffset += deltaHz;
         this.clampPan();
         this.refreshChrome();
     }

@@ -3,12 +3,12 @@
  *
  * Signal path, per complex IQ sample at 96 kHz:
  *   1. NCO      : shifts the centre of the wanted passband to DC
- *                 (CW: the carrier itself; SSB: tuned + passband centre from MODES, ±1650 Hz).
+ *                 (CW: the carrier itself; SSB: tuned + passband centre from MODES).
  *   2. Halfband : 31-tap FIR anti-alias lowpass, decimate 2:1 -> 48 kHz complex.
  *   3. Channel  : real-coefficient Kaiser windowed-sinc lowpass applied to I and Q,
  *                 cutoff = passband / 2. Everything outside the wanted passband, including the
  *                 opposite sideband, is gone after this stage. This is the sideband selection.
- *   4. BFO      : rotate by +pitch (CW), +1650 Hz (USB) or -1650 Hz (LSB) and take the real part.
+ *   4. BFO      : rotate by +pitch (CW) or the SSB passband centre (USB +, LSB −) and take Re().
  *   5. AGC (in place).
  *
  * Image rejection is set by the channel filter stopband (~60 dB), not by IQ balance tricks.
@@ -111,7 +111,12 @@ class DidahDemodulator {
         this.channelCutoff = 0.0;
 
         // AGC (processes in place)
+        this.agcSpeed = 'medium';
         this.agc = new AGC(this.audioRate);
+
+        // 96 kHz IQ is halfband-decimated 2:1 to 48 kHz audio. Kiwi IQ (~12 kHz) is already
+        // audio-rate, so NCO / channel / BFO run at iqRate with no decimator.
+        this.decimate2 = this.iqRate >= 72000;
 
         // Output buffer, reused across calls (re-allocated only if the packet size changes)
         this.audioOut = new Float32Array(0);
@@ -119,7 +124,29 @@ class DidahDemodulator {
         this.updateFilters();
     }
 
+    /**
+     * Rebuild the NCO/halfband/channel chain for a new IQ sample rate.
+     * Rates >= 72 kHz keep the 2:1 halfband to 48 kHz audio; slower IQ (Kiwi ~12 kHz)
+     * is demodulated at the IQ rate and resampled in the audio worklet.
+     */
+    setIqRate(iqRate) {
+        const rate = Math.max(1000, iqRate);
+        if (rate === this.iqRate && ((rate >= 72000) === this.decimate2)) return;
+        this.iqRate = rate;
+        this.decimate2 = rate >= 72000;
+        const audioRate = this.decimate2 ? 48000 : rate;
+        this.halfband.setTaps(designLowpass(31, this.iqRate / 4, this.iqRate, 60));
+        if (audioRate !== this.audioRate) {
+            this.audioRate = audioRate;
+            this.agc = new AGC(this.audioRate);
+            this.agc.setSpeed(this.agcSpeed);
+        }
+        this.channelCutoff = -1;
+        this.updateFilters();
+    }
+
     setAgcSpeed(speed) {
+        this.agcSpeed = speed;
         this.agc.setSpeed(speed);
     }
 
@@ -182,13 +209,14 @@ class DidahDemodulator {
     }
 
     /**
-     * Demodulates interleaved 16-bit complex IQ into 48 kHz float audio
+     * Demodulates interleaved 16-bit complex IQ into float audio at `this.audioRate`.
      * @param {Int16Array} int16IQ - Interleaved [I0, Q0, I1, Q1, ...]
-     * @returns {Float32Array} Mono audio at 48 kHz. Internal buffer: valid until the next call.
+     * @returns {Float32Array} Mono audio. Internal buffer: valid until the next call.
      */
     process(int16IQ) {
         const numComplex = int16IQ.length / 2;
-        const outLen = numComplex >> 1;
+        const decim = this.decimate2;
+        const outLen = decim ? numComplex >> 1 : numComplex;
         if (this.audioOut.length !== outLen) this.audioOut = new Float32Array(outLen);
         const out = this.audioOut;
 
@@ -201,30 +229,37 @@ class DidahDemodulator {
         let ncoPhase = this.ncoPhase;
         let bfoPhase = this.bfoPhase;
 
-        for (let n = 0, o = 0; n < numComplex; n += 2, o++) {
-            // Two input samples: NCO shift each, push both into the halfband, compute once (2:1)
-            for (let k = 0; k < 2; k++) {
+        for (let n = 0, o = 0; n < numComplex; ) {
+            const samplesThisOut = decim ? 2 : 1;
+            if (n + samplesThisOut > numComplex) break;
+            for (let k = 0; k < samplesThisOut; k++) {
                 const idx = (n + k) * 2;
                 const i = int16IQ[idx] * inv32768;
                 const q = int16IQ[idx + 1] * inv32768;
                 const c = Math.cos(ncoPhase);
                 const s = Math.sin(ncoPhase);
-                halfband.push(i * c - q * s, i * s + q * c);
+                const si = i * c - q * s;
+                const sq = i * s + q * c;
                 ncoPhase += ncoStep;
                 if (ncoPhase > TWO_PI) ncoPhase -= TWO_PI;
                 else if (ncoPhase < -TWO_PI) ncoPhase += TWO_PI;
+                if (decim) {
+                    halfband.push(si, sq);
+                } else {
+                    channel.push(si, sq);
+                }
             }
-            halfband.compute();
-
-            // Channel lowpass on the complex baseband: sideband selection happens here
-            channel.push(halfband.outI, halfband.outQ);
+            n += samplesThisOut;
+            if (decim) {
+                halfband.compute();
+                channel.push(halfband.outI, halfband.outQ);
+            }
             channel.compute();
-
-            // BFO: rotate to the audio pitch, keep the real part
             out[o] = channel.outI * Math.cos(bfoPhase) - channel.outQ * Math.sin(bfoPhase);
             bfoPhase += bfoStep;
             if (bfoPhase > TWO_PI) bfoPhase -= TWO_PI;
             else if (bfoPhase < -TWO_PI) bfoPhase += TWO_PI;
+            o++;
         }
 
         this.ncoPhase = ncoPhase;

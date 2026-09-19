@@ -7,8 +7,9 @@
  * wrapper that feeds it from `port` messages and renders into the output block.
  *
  * Port protocol (main thread -> worklet):
- *   Float32Array            : 48 kHz mono audio to enqueue (transferred, not copied)
+ *   Float32Array            : mono audio at `inputRate` to enqueue (transferred, not copied)
  *   { type: 'reset' }       : drop buffered audio (power off / stop)
+ *   { type: 'inputRate', rate } : demodulator output rate (48000 replay, ~12000 Kiwi)
  *   { type: 'debug', on }   : enable once-per-second stats messages
  * (worklet -> main thread):
  *   { type: 'level', peak } : ~15 Hz output peak for the VU meter
@@ -40,6 +41,22 @@ class DidahAudioEngine {
         this.lastSample = 0.0;
 
         this.stats = { blocks: 0, underruns: 0, overflows: 0, minBuf: Infinity, maxBuf: 0 };
+        this._syncBufferTargets();
+    }
+
+    _syncBufferTargets() {
+        // ~128 ms target / ~85 ms prebuffer, relative to the demodulator output rate
+        const rate = this.inputRate || 48000;
+        this.targetBuffer = Math.max(512, Math.round(rate * 0.128));
+        this.minPrebuffer = Math.max(256, Math.round(rate * 0.085));
+    }
+
+    setInputRate(rate) {
+        const next = Math.max(1000, rate);
+        if (next === this.inputRate) return;
+        this.inputRate = next;
+        this._syncBufferTargets();
+        this.reset();
     }
 
     /** Enqueue mono float samples. */
@@ -151,6 +168,7 @@ if (typeof registerProcessor !== 'undefined') {
                 const m = e.data;
                 if (m instanceof Float32Array) this.engine.push(m);
                 else if (m && m.type === 'reset') this.engine.reset();
+                else if (m && m.type === 'inputRate') this.engine.setInputRate(m.rate);
                 else if (m && m.type === 'debug') this.debug = !!m.on;
             };
         }

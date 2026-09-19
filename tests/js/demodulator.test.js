@@ -51,3 +51,21 @@ test('output buffer is reused between calls and is half the complex input length
     assert.equal(a.length, 1200);
     assert.equal(a, b);
 });
+
+test('setIqRate(12000) skips the halfband and still puts a CW tone at the BFO pitch', () => {
+    const d = new DidahDemodulator(RATE, AUDIO);
+    d.setIqRate(12000);
+    assert.equal(d.decimate2, false);
+    assert.equal(d.audioRate, 12000);
+    d.setModulation('cw'); d.setOffsetFrequency(0); d.setBfoPitch(700);
+    const audio = run(d, iqTone(0, 12000, 12000, 0.1), 2400);
+    assert.equal(audio.length, 12000);
+    const { freq } = audioPeak(audio, 12000);
+    assert.ok(Math.abs(freq - 700) < 12, `12 kHz audio peak ${freq} Hz, expected 700 Hz`);
+
+    d.setIqRate(96000);
+    assert.equal(d.decimate2, true);
+    assert.equal(d.audioRate, 48000);
+    const iq = iqTone(1000, RATE, 2400, 0.1);
+    assert.equal(d.process(iq).length, 1200);
+});

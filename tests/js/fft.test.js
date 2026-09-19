@@ -33,3 +33,17 @@ test('setSize reallocates tables and window sum', () => {
     assert.equal(fft.window.length, 4096);
     assert.ok(fft.windowSum > 0);
 });
+
+test('blackman window is coherent-gain normalised; mag2Buffer matches dB', () => {
+    const N = 2048, rate = 96000, f = 10000;
+    const fft = new DidahFFT(N);
+    fft.initWindow('blackman');
+    assert.equal(fft.windowName, 'blackman');
+    const re = new Float32Array(N), im = new Float32Array(N);
+    for (let n = 0; n < N; n++) { const ph = (2 * Math.PI * f * n) / rate; re[n] = Math.cos(ph); im[n] = Math.sin(ph); }
+    const out = fft.computeSpectrumDb(re, im);
+    let pk = -Infinity, pi = 0;
+    for (let i = 0; i < N; i++) if (out[i] > pk) { pk = out[i]; pi = i; }
+    assert.ok(Math.abs(pk) < 0.5, `blackman peak ${pk} dB`);
+    assert.ok(Math.abs(10 * Math.log10(fft.mag2Buffer[pi]) - pk) < 1e-6);
+});

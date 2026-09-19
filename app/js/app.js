@@ -26,8 +26,17 @@ document.addEventListener('DOMContentLoaded', () => {
         filterEnabled: true,
         filterKernel: 'medium', // Default Medium (7-tap) Click Filter
         agcSpeed: 'medium',
-        userHasTuned: false   // once true, the server's start_freq is no longer applied
+        userHasTuned: false,  // once true, the server's start_freq is no longer applied
+        selectedSourceId: 'va2gka',
+        ssbLow: 200,
+        ssbHigh: 2700,
+        qrssEnabled: false
     };
+
+    setSsbPassband(state.ssbLow, state.ssbHigh);
+
+    let source = findSource(state.selectedSourceId);
+    let kiwi = null;
 
     // 1. Initialize CW Adaptive Filter (from my_adaptive_iir_filter.py)
     const cwFilter = new CWAdaptiveFilter(state.fftSize);
@@ -87,33 +96,126 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let blockReal = new Float32Array(state.fftSize);
     let blockImag = new Float32Array(state.fftSize);
+    let qrssAcc = new Float32Array(state.fftSize);
+    let qrssCount = 0;
+
+    function resetQrssAcc() {
+        qrssAcc.fill(0);
+        qrssCount = 0;
+    }
+
+    /** QRSS: slower columns via Welch-style power averaging. Speed 1x integrates longest. */
+    function qrssAvgCount() {
+        const speed = Math.max(1, Math.min(6, state.speedMultiplier));
+        return Math.max(4, 16 * (7 - speed));
+    }
 
     // 7b. Initialize SNR S-Meter (0 to 40+ dB above local noise floor)
     const smeter = new DidahSMeter();
     smeter.init();
     smeter.setModeInfo(state.modulation, state.cwBandwidth);
 
-    // 8. Initialize didahSDR WebSocket Connection
+    // 8. IQ transports: local didah /ws (replay) or a direct KiwiSDR SND socket
     const fpsBadge = document.getElementById('fps-badge');
     waterfall.onFpsCallback = (fps) => {
         if (fpsBadge) fpsBadge.textContent = `${fps} FPS`;
     };
 
+    function setStatus(statusText, isConnected) {
+        const dot = document.getElementById('status-dot');
+        const text = document.getElementById('status-text');
+        if (dot) dot.className = `status-dot ${isConnected ? 'connected' : ''}`;
+        if (text) text.textContent = statusText;
+        const rxBtn = document.getElementById('rx-btn');
+        if (rxBtn) rxBtn.classList.toggle('active', isConnected && state.running);
+    }
+
+    function processRawIQ(int16IQ) {
+        if (!state.running) return;
+
+        audioPlayer.pushFloatAudio(demodulator.process(int16IQ));
+
+        const numComplex = int16IQ.length / 2;
+        const inv32768 = 1.0 / 32768.0;
+
+        for (let i = 0; i < numComplex; i++) {
+            ringReal[ringHead] = int16IQ[i * 2] * inv32768;
+            ringImag[ringHead] = int16IQ[i * 2 + 1] * inv32768;
+            ringHead = ringHead === RING_SIZE - 1 ? 0 : ringHead + 1;
+        }
+        samplesAvailable += numComplex;
+
+        const hopDiv = state.qrssEnabled ? 2 : Math.max(1, state.speedMultiplier);
+        const hopSize = Math.max(128, Math.floor(state.fftSize / hopDiv));
+        const avgN = state.qrssEnabled ? qrssAvgCount() : 1;
+
+        while (samplesAvailable >= state.fftSize) {
+            let readIdx = (ringHead - samplesAvailable + RING_SIZE) % RING_SIZE;
+            for (let i = 0; i < state.fftSize; i++) {
+                blockReal[i] = ringReal[readIdx];
+                blockImag[i] = ringImag[readIdx];
+                readIdx = readIdx === RING_SIZE - 1 ? 0 : readIdx + 1;
+            }
+
+            const specDb = clientFft.computeSpectrumDb(blockReal, blockImag);
+
+            if (state.qrssEnabled) {
+                const mag2 = clientFft.mag2Buffer;
+                const n = specDb.length;
+                for (let i = 0; i < n; i++) qrssAcc[i] += mag2[i];
+                qrssCount++;
+                if (qrssCount < avgN) {
+                    samplesAvailable -= hopSize;
+                    continue;
+                }
+                const inv = 1.0 / qrssCount;
+                for (let i = 0; i < n; i++) {
+                    specDb[i] = 10.0 * Math.log10(Math.max(qrssAcc[i] * inv, 1e-15));
+                    qrssAcc[i] = 0;
+                }
+                qrssCount = 0;
+            }
+
+            const processed = state.filterEnabled ? cwFilter.process(specDb) : specDb;
+            waterfall.addSlice(processed);
+
+            smeter.updateFromSpectrum(specDb, state.sampleRate, state.centerFreq, state.tunedFreq, state.modulation, state.cwBandwidth);
+
+            samplesAvailable -= hopSize;
+        }
+    }
+
+    function resetIqPipeline() {
+        ringHead = 0;
+        samplesAvailable = 0;
+        audioPlayer.resetBuffer();
+        waterfall.clear();
+        smeter.reset();
+        resetQrssAcc();
+    }
+
+    function applyIqRate(rate) {
+        state.sampleRate = rate;
+        demodulator.setIqRate(rate);
+        audioPlayer.setInputRate(demodulator.audioRate);
+        resetIqPipeline();
+        waterfall.setCenterFreq(state.centerFreq, rate);
+        if (rate < 30000) waterfall.zoomMin();
+        else if (waterfall.zoom <= 1.01) waterfall.setZoom(2.67);
+    }
+
     const conn = new DidahConnection({
         onStatusChange: (statusText, isConnected) => {
-            const dot = document.getElementById('status-dot');
-            const text = document.getElementById('status-text');
-            if (dot) dot.className = `status-dot ${isConnected ? 'connected' : ''}`;
-            if (text) text.textContent = statusText;
-            const rxBtn = document.getElementById('rx-btn');
-            if (rxBtn) rxBtn.classList.toggle('active', isConnected && state.running);
+            if (source.protocol !== 'didah') return;
+            setStatus(statusText, isConnected);
         },
         onConfig: (cfg) => {
+            if (source.protocol !== 'didah') return;
             if (cfg.center_freq) {
                 state.centerFreq = cfg.center_freq;
             }
             if (cfg.samp_rate) {
-                state.sampleRate = cfg.samp_rate;
+                applyIqRate(cfg.samp_rate);
             }
             if (cfg.start_freq && !state.userHasTuned) {
                 state.tunedFreq = cfg.start_freq;
@@ -125,53 +227,83 @@ document.addEventListener('DOMContentLoaded', () => {
             waterfall.setCenterFreq(state.centerFreq, state.sampleRate);
             setTunedFrequency(state.tunedFreq, true, false);
             updateTopBarInfo();
+            updateSourceStatus();
 
             conn.setStreamMode('raw_iq');
         },
-        // Client-side Zero-Latency Stream: processes both audio and waterfall in lockstep
-        onRawIQ: (int16IQ) => {
-            if (!state.running) return;
-
-            // A. Demodulate audio in browser (zero network roundtrip, instantaneous response)
-            audioPlayer.pushFloatAudio(demodulator.process(int16IQ));
-
-            // B. Client-side STFT FFT with partial segment overlap
-            const numComplex = int16IQ.length / 2;
-            const inv32768 = 1.0 / 32768.0;
-
-            for (let i = 0; i < numComplex; i++) {
-                ringReal[ringHead] = int16IQ[i * 2] * inv32768;
-                ringImag[ringHead] = int16IQ[i * 2 + 1] * inv32768;
-                ringHead = ringHead === RING_SIZE - 1 ? 0 : ringHead + 1;
-            }
-            samplesAvailable += numComplex;
-
-            // Calculate hop size from speedMultiplier (1x, 2x, 3x, 4x)
-            const hopSize = Math.max(128, Math.floor(state.fftSize / Math.max(1, state.speedMultiplier)));
-
-            while (samplesAvailable >= state.fftSize) {
-                let readIdx = (ringHead - samplesAvailable + RING_SIZE) % RING_SIZE;
-                for (let i = 0; i < state.fftSize; i++) {
-                    blockReal[i] = ringReal[readIdx];
-                    blockImag[i] = ringImag[readIdx];
-                    readIdx = readIdx === RING_SIZE - 1 ? 0 : readIdx + 1;
-                }
-
-                const specDb = clientFft.computeSpectrumDb(blockReal, blockImag);
-                const processed = state.filterEnabled ? cwFilter.process(specDb) : specDb;
-                waterfall.addSlice(processed);
-
-                // Update SNR S-Meter (dB above local noise floor)
-                smeter.updateFromSpectrum(specDb, state.sampleRate, state.centerFreq, state.tunedFreq, state.modulation, state.cwBandwidth);
-
-                samplesAvailable -= hopSize;
-            }
-        }
+        onRawIQ: processRawIQ
     });
+
+    function ensureKiwi() {
+        if (kiwi) return kiwi;
+        kiwi = new KiwiConnection({
+            onRawIQ: processRawIQ,
+            onReady: (info) => {
+                if (source.protocol !== 'kiwi') return;
+                applyIqRate(info.sampleRate);
+                state.centerFreq = info.centerFreq;
+                waterfall.setCenterFreq(state.centerFreq, state.sampleRate);
+                waterfall.zoomMin();
+                setTunedFrequency(state.tunedFreq, true, false);
+                updateTopBarInfo();
+                updateSourceStatus();
+            },
+            onStatusChange: (statusText, isConnected) => {
+                if (source.protocol !== 'kiwi') return;
+                setStatus(statusText, isConnected);
+            }
+        });
+        return kiwi;
+    }
+
+    function isActiveConnected() {
+        return source.protocol === 'kiwi' ? !!(kiwi && kiwi.connected) : conn.connected;
+    }
+
+    function connectActive() {
+        if (source.protocol === 'kiwi') {
+            const k = ensureKiwi();
+            k.host = source.host;
+            k.port = source.port;
+            k.secure = !!source.secure;
+            k.password = source.password || '';
+            k.lowCut = source.iqLowCut;
+            k.highCut = source.iqHighCut;
+            k.startFreqHz = source.startFreq;
+            k.ddcHz = state.centerFreq;
+            k.connect();
+        } else {
+            conn.connect();
+        }
+    }
+
+    function disconnectTransports() {
+        if (kiwi) kiwi.disconnect();
+        conn.disconnect();
+    }
 
     // Connect Waterfall click/drag/wheel tuning to ValueDial and DSP
     waterfall.onTuneCallback = (newFreq) => {
         setTunedFrequency(newFreq, true);
+    };
+    waterfall.onPanCallback = (deltaHz) => {
+        if (source.protocol !== 'kiwi') {
+            waterfall.panOffset += deltaHz;
+            waterfall.clampPan();
+            waterfall.refreshChrome();
+            return;
+        }
+        state.centerFreq = Math.round(state.centerFreq + deltaHz);
+        const half = state.sampleRate / 2;
+        const maxOff = Math.max(0, half - 50);
+        if (state.tunedFreq > state.centerFreq + maxOff) state.tunedFreq = Math.round(state.centerFreq + maxOff);
+        if (state.tunedFreq < state.centerFreq - maxOff) state.tunedFreq = Math.round(state.centerFreq - maxOff);
+        waterfall.panOffset = 0;
+        waterfall.setCenterFreq(state.centerFreq, state.sampleRate);
+        if (kiwi) kiwi.tune(state.centerFreq);
+        setTunedFrequency(state.tunedFreq, true, true);
+        updateTopBarInfo();
+        updateSourceStatus();
     };
 
     /**
@@ -183,6 +315,18 @@ document.addEventListener('DOMContentLoaded', () => {
         if (fromUser) state.userHasTuned = true;
         if (updateDial) {
             valueDial.setValue(state.tunedFreq, false);
+        }
+
+        if (source.protocol === 'kiwi') {
+            const half = state.sampleRate / 2;
+            if (Math.abs(state.tunedFreq - state.centerFreq) > half - 50) {
+                state.centerFreq = state.tunedFreq;
+                waterfall.panOffset = 0;
+                waterfall.setCenterFreq(state.centerFreq, state.sampleRate);
+                if (kiwi) kiwi.tune(state.centerFreq);
+                updateTopBarInfo();
+                updateSourceStatus();
+            }
         }
 
         if (state.modulation === 'cw') {
@@ -224,20 +368,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const key = `${params.mod}|${params.offset_freq}|${params.low_cut}|${params.high_cut}`;
             if (key === lastDspControl) return;
             lastDspControl = key;
-            conn.setDemodParams(params);
+            if (source.protocol === 'didah') conn.setDemodParams(params);
         });
     }
 
     function setModulation(mod) {
         state.modulation = mod.toLowerCase();
-        const cwBwContainer = document.getElementById('cw-bw-container');
-        const cwOffsetContainer = document.getElementById('cw-offset-container');
-        if (cwBwContainer) {
-            cwBwContainer.style.opacity = (state.modulation === 'cw') ? '1.0' : '0.4';
-        }
-        if (cwOffsetContainer) {
-            cwOffsetContainer.style.opacity = (state.modulation === 'cw') ? '1.0' : '0.4';
-        }
+        const cw = state.modulation === 'cw';
+        const cwSec = document.getElementById('cw-config-section');
+        const ssbSec = document.getElementById('ssb-config-section');
+        if (cwSec) cwSec.classList.toggle('is-dimmed', !cw);
+        if (ssbSec) ssbSec.classList.toggle('is-dimmed', cw);
 
         document.querySelectorAll('.mode-btn').forEach(btn => {
             btn.classList.toggle('active', btn.dataset.mode === state.modulation);
@@ -251,7 +392,125 @@ document.addEventListener('DOMContentLoaded', () => {
         const cfBadge = document.getElementById('center-freq-badge');
         const srBadge = document.getElementById('sample-rate-badge');
         if (cfBadge) cfBadge.textContent = `CF: ${(state.centerFreq / 1000000).toFixed(4)} MHz`;
-        if (srBadge) srBadge.textContent = `SR: ${state.sampleRate / 1000} kHz`;
+        if (srBadge) {
+            const khz = state.sampleRate / 1000;
+            srBadge.textContent = `SR: ${Number.isInteger(khz) ? khz : khz.toFixed(2)} kHz`;
+        }
+    }
+
+    function updateSourceStatus() {
+        const el = document.getElementById('source-status');
+        if (!el) return;
+        const proto = source.protocol === 'kiwi' ? 'KiwiSDR SND IQ' : 'didah 0x03 IQ';
+        const khz = state.sampleRate / 1000;
+        const srTxt = `${Number.isInteger(khz) ? khz : khz.toFixed(2)} kHz`;
+        const cf = `${(state.centerFreq / 1000000).toFixed(4)} MHz`;
+        const extra = source.protocol === 'kiwi'
+            ? ` ${source.host}:${source.port}. Waterfall is a 12 kHz zoom; mouse and wheel move the Kiwi DDC.`
+            : '';
+        el.textContent = `${proto} · ${srTxt} · CF ${cf}.${extra}`;
+    }
+
+    function applyKiwiEndpointFromInput() {
+        const urlEl = document.getElementById('kiwi-url');
+        const parsed = normalizeKiwiUrl(urlEl ? urlEl.value : '');
+        if (!parsed.ok) {
+            if (urlEl) {
+                urlEl.classList.add('invalid');
+                urlEl.title = parsed.error;
+            }
+            return false;
+        }
+        if (urlEl) {
+            urlEl.classList.remove('invalid');
+            urlEl.title = parsed.href;
+            urlEl.value = parsed.href;
+        }
+        const kiwiSrc = findSource('f4kiy');
+        kiwiSrc.host = parsed.host;
+        kiwiSrc.port = parsed.port;
+        kiwiSrc.secure = parsed.secure;
+        return true;
+    }
+
+    /** Apply the URL box and open (or reopen) the Kiwi SND socket. */
+    function connectKiwiFromInput() {
+        if (!applyKiwiEndpointFromInput()) {
+            setStatus('Invalid KiwiSDR URL', false);
+            return;
+        }
+        const radio = document.querySelector('input[name="iq-source"][value="f4kiy"]');
+        if (radio && !radio.checked) {
+            radio.checked = true;
+            selectSource('f4kiy', true);
+            return;
+        }
+        updateSourceStatus();
+        if (!state.running) return;
+        const kiwiSrc = findSource('f4kiy');
+        setStatus(`Connecting to ${kiwiSrc.host}:${kiwiSrc.port}…`, false);
+        connectActive();
+    }
+
+    function applySourcePresets(src) {
+        const minEl = document.getElementById('min-lvl-slider');
+        const dynEl = document.getElementById('dyn-range-slider');
+        const fftEl = document.getElementById('fft-select');
+        if (minEl) {
+            minEl.value = String(src.minLevel);
+            minEl.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        if (dynEl) {
+            dynEl.value = String(src.dynamicRange);
+            dynEl.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        if (fftEl && fftEl.value !== String(src.fftSize)) {
+            fftEl.value = String(src.fftSize);
+            fftEl.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    }
+
+    function selectSource(id, fromUser) {
+        const src = findSource(id);
+        const switching = src.id !== source.id;
+        source = src;
+        state.selectedSourceId = src.id;
+        document.querySelectorAll('input[name="iq-source"]').forEach((el) => {
+            el.checked = el.value === src.id;
+        });
+        if (src.protocol === 'kiwi') applyKiwiEndpointFromInput();
+        if (fromUser) applySourcePresets(src);
+        if (!switching) {
+            updateSourceStatus();
+            return;
+        }
+        disconnectTransports();
+        resetIqPipeline();
+        lastDspControl = '';
+        state.userHasTuned = false;
+        state.tunedFreq = src.startFreq;
+        valueDial.setValue(state.tunedFreq, false);
+        if (src.protocol === 'kiwi') {
+            state.centerFreq = src.startFreq;
+            applyIqRate(12000);
+            if (kiwi) kiwi.ddcHz = src.startFreq;
+        } else {
+            state.centerFreq = 14048000;
+            applyIqRate(96000);
+        }
+        setModulation(src.startMod);
+        state.userHasTuned = false;
+        updateTopBarInfo();
+        updateSourceStatus();
+        if (!state.running) return;
+        if (src.protocol === 'kiwi') {
+            const urlEl = document.getElementById('kiwi-url');
+            if (urlEl && urlEl.classList.contains('invalid')) {
+                setStatus('Invalid KiwiSDR URL', false);
+                return;
+            }
+        }
+        connectActive();
     }
 
     // =========================================================================
@@ -264,11 +523,11 @@ document.addEventListener('DOMContentLoaded', () => {
     powerBtn.addEventListener('click', () => {
         state.running = !state.running;
         powerBtn.classList.toggle('active', state.running);
-        if (rxBtn) rxBtn.classList.toggle('active', state.running && conn.connected);
+        if (rxBtn) rxBtn.classList.toggle('active', state.running && isActiveConnected());
         if (state.running) {
             audioPlayer.resume();
-            if (!conn.connected) {
-                conn.connect();
+            if (!isActiveConnected()) {
+                connectActive();
             }
         } else {
             audioPlayer.stop();
@@ -321,11 +580,17 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // 4. W-Config floating window (waterfall settings), same behaviour as the S-Meter window
+    // 4. Config floating window (waterfall / CW / SSB), same behaviour as the S-Meter window
     setupFloatingWindow({
         windowId: 'wconfig-window', headerId: 'wconfig-header', closeBtnId: 'wconfig-close-btn',
         toggleBtnId: 'wconfig-btn', storageKey: 'didah_wconfig', defaultVisible: false,
         defaultPos: { top: '58px', left: 'auto', right: '20px' }
+    });
+
+    setupFloatingWindow({
+        windowId: 'source-window', headerId: 'source-header', closeBtnId: 'source-close-btn',
+        toggleBtnId: 'source-btn', storageKey: 'didah_source', defaultVisible: false,
+        defaultPos: { top: '58px', left: '20px', right: 'auto' }
     });
 
     // 5. Tuning Step Selector (also driven by the + / - keys)
@@ -351,6 +616,8 @@ document.addEventListener('DOMContentLoaded', () => {
         cwFilter.resize(state.fftSize);
         blockReal = new Float32Array(state.fftSize);
         blockImag = new Float32Array(state.fftSize);
+        qrssAcc = new Float32Array(state.fftSize);
+        resetQrssAcc();
         samplesAvailable = 0;
     });
 
@@ -437,6 +704,27 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function applySsbSliders() {
+        const lowEl = document.getElementById('ssb-low-slider');
+        const highEl = document.getElementById('ssb-high-slider');
+        const pb = setSsbPassband(lowEl ? lowEl.value : state.ssbLow, highEl ? highEl.value : state.ssbHigh);
+        state.ssbLow = pb.low;
+        state.ssbHigh = pb.high;
+        if (lowEl) lowEl.value = String(pb.low);
+        if (highEl) highEl.value = String(pb.high);
+        const lowVal = document.getElementById('ssb-low-val');
+        const highVal = document.getElementById('ssb-high-val');
+        if (lowVal) lowVal.textContent = `${pb.low} Hz`;
+        if (highVal) highVal.textContent = `${pb.high} Hz`;
+        if (state.modulation !== 'cw') setTunedFrequency(state.tunedFreq, false, false);
+        smeter.setModeInfo(state.modulation, state.cwBandwidth);
+    }
+
+    const ssbLowSlider = document.getElementById('ssb-low-slider');
+    const ssbHighSlider = document.getElementById('ssb-high-slider');
+    if (ssbLowSlider) ssbLowSlider.addEventListener('input', applySsbSliders);
+    if (ssbHighSlider) ssbHighSlider.addEventListener('input', applySsbSliders);
+
     // 9. AGC Speed Selector (Fast, Medium, Slow)
     const agcSelect = document.getElementById('agc-select');
     if (agcSelect) {
@@ -446,7 +734,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // 10. CW Adaptive Filter & Click Filter Controls
+    // 10. CW Adaptive Filter, QRSS, and Click Filter
     const cwFilterToggle = document.getElementById('cw-filter-toggle');
     cwFilterToggle.addEventListener('click', () => {
         state.filterEnabled = !state.filterEnabled;
@@ -454,6 +742,22 @@ document.addEventListener('DOMContentLoaded', () => {
         cwFilterToggle.classList.toggle('active', state.filterEnabled);
         cwFilterToggle.textContent = state.filterEnabled ? 'CW Filter: ON' : 'CW Filter: OFF';
     });
+
+    function setQrssEnabled(on) {
+        state.qrssEnabled = !!on;
+        clientFft.initWindow(state.qrssEnabled ? 'blackman' : 'flattop');
+        resetQrssAcc();
+        const btn = document.getElementById('qrss-toggle');
+        if (btn) {
+            btn.classList.toggle('active', state.qrssEnabled);
+            btn.textContent = state.qrssEnabled ? 'QRSS: ON' : 'QRSS: OFF';
+        }
+    }
+
+    const qrssToggle = document.getElementById('qrss-toggle');
+    if (qrssToggle) {
+        qrssToggle.addEventListener('click', () => setQrssEnabled(!state.qrssEnabled));
+    }
 
     const kernelSelect = document.getElementById('kernel-select');
     if (kernelSelect) {
@@ -545,6 +849,8 @@ document.addEventListener('DOMContentLoaded', () => {
         ['speedMultiplier', 'speed-slider', 'input'],
         ['cwOffset', 'cw-offset-slider', 'input'],
         ['cwBandwidth', 'cw-bw-slider', 'input'],
+        ['ssbLow', 'ssb-low-slider', 'input'],
+        ['ssbHigh', 'ssb-high-slider', 'input'],
         ['stepSize', 'step-select', 'change'],
         ['fftSize', 'fft-select', 'change'],
         ['primaryTheme', 'theme-select', 'change'],
@@ -556,6 +862,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const out = {};
         for (const [key] of SETTINGS) out[key] = state[key];
         out.filterEnabled = state.filterEnabled;
+        out.qrssEnabled = state.qrssEnabled;
+        out.selectedSourceId = state.selectedSourceId;
+        const kiwiUrlEl = document.getElementById('kiwi-url');
+        if (kiwiUrlEl) out.kiwiUrl = kiwiUrlEl.value;
         try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(out)); } catch (e) { /* storage unavailable */ }
     }
 
@@ -572,12 +882,21 @@ document.addEventListener('DOMContentLoaded', () => {
             el.dispatchEvent(new Event(evt, { bubbles: true }));
         }
         if (saved.filterEnabled !== undefined && saved.filterEnabled !== state.filterEnabled) cwFilterToggle.click();
+        if (saved.qrssEnabled !== undefined && saved.qrssEnabled !== state.qrssEnabled) setQrssEnabled(!!saved.qrssEnabled);
+        if (saved.selectedSourceId) {
+            const el = document.querySelector(`input[name="iq-source"][value="${saved.selectedSourceId}"]`);
+            if (el) el.checked = true;
+        }
+        if (saved.kiwiUrl) {
+            const el = document.getElementById('kiwi-url');
+            if (el) el.value = saved.kiwiUrl;
+        }
     }
 
-    // Any control change in the bottom panel or the W-Config window schedules a save
+    // Any control change in the bottom panel or the Config window schedules a save
     let saveTimer = null;
     const scheduleSave = () => { clearTimeout(saveTimer); saveTimer = setTimeout(saveSettings, 250); };
-    for (const id of ['bottom-panel', 'wconfig-window']) {
+    for (const id of ['bottom-panel', 'wconfig-window', 'source-window']) {
         const root = document.getElementById(id);
         if (!root) continue;
         root.addEventListener('input', scheduleSave);
@@ -585,8 +904,48 @@ document.addEventListener('DOMContentLoaded', () => {
         root.addEventListener('click', scheduleSave);
     }
     loadSettings();
+    applyKiwiEndpointFromInput();
 
-    // Initial connection
+    document.querySelectorAll('input[name="iq-source"]').forEach((el) => {
+        el.addEventListener('change', () => {
+            if (el.checked) selectSource(el.value, true);
+        });
+    });
+
+    const kiwiUrlEl = document.getElementById('kiwi-url');
+    const kiwiConnectBtn = document.getElementById('kiwi-connect-btn');
+    if (kiwiUrlEl) {
+        kiwiUrlEl.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            connectKiwiFromInput();
+            kiwiUrlEl.blur();
+        });
+        const kiwiCard = kiwiUrlEl.closest('.source-option-kiwi');
+        if (kiwiCard) {
+            kiwiCard.addEventListener('click', (e) => {
+                if (e.target === kiwiUrlEl || e.target === kiwiConnectBtn || (kiwiConnectBtn && kiwiConnectBtn.contains(e.target))) return;
+                const radio = document.querySelector('input[name="iq-source"][value="f4kiy"]');
+                if (radio && !radio.checked) {
+                    radio.checked = true;
+                    radio.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            });
+        }
+    }
+    if (kiwiConnectBtn) {
+        kiwiConnectBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            connectKiwiFromInput();
+        });
+    }
+
+    const checked = document.querySelector('input[name="iq-source"]:checked');
+    const startId = (checked && checked.value) || 'va2gka';
+    if (startId !== source.id) selectSource(startId, false);
+    else updateSourceStatus();
+
     updateTopBarInfo();
-    conn.connect();
+    if (state.running) connectActive();
 });

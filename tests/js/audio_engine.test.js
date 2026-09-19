@@ -59,3 +59,17 @@ test('reset drops everything and returns to prebuffering', () => {
     assert.equal(e.prebuffering, true);
     assert.equal(peakAbs(Object.assign(new Float32Array(128), {})), 0);
 });
+
+test('setInputRate(12000) resamples toward the context rate and resets the ring', () => {
+    const e = new DidahAudioEngine(48000, 48000);
+    e.push(tone(8000));
+    e.setInputRate(12000);
+    assert.equal(e.inputRate, 12000);
+    assert.equal(e.buffered, 0);
+    assert.equal(e.prebuffering, true);
+    const out = new Float32Array(480);        // 10 ms of 48 kHz output
+    e.push(tone(e.minPrebuffer + 2400, 1000, 12000));
+    const before = e.buffered;
+    e.render(out);
+    assert.ok(Math.abs((before - e.buffered) - 120) < 8, `consumed ${before - e.buffered}, expected ~120 input samples`);
+});
