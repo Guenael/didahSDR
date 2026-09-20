@@ -30,7 +30,9 @@ document.addEventListener('DOMContentLoaded', () => {
         selectedSourceId: 'va2gka',
         ssbLow: 200,
         ssbHigh: 2700,
-        qrssEnabled: false
+        qrssEnabled: false,
+        wpm: 20,
+        iambicMode: 'B'
     };
 
     setSsbPassband(state.ssbLow, state.ssbHigh);
@@ -62,6 +64,10 @@ document.addEventListener('DOMContentLoaded', () => {
     demodulator.setAgcSpeed(state.agcSpeed);
     demodulator.setCwBandwidth(state.cwBandwidth);
     demodulator.setBfoPitch(state.cwOffset);
+
+    const keyer = new CwKeyer();
+    keyer.setWpm(state.wpm);
+    keyer.setIambicMode(state.iambicMode);
 
     // 4. Initialize Web Audio Player
     const audioPlayer = new WebAudioPlayer();
@@ -117,8 +123,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /** QRSS: slower columns via Welch-style power averaging. Speed 1x integrates longest. */
     function qrssAvgCount() {
-        const speed = Math.max(1, Math.min(6, state.speedMultiplier));
-        return Math.max(4, 16 * (7 - speed));
+        const speed = Math.max(1, Math.min(8, state.speedMultiplier));
+        return Math.max(4, 16 * (9 - speed));
     }
 
     // 7b. Initialize SNR S-Meter (0 to 40+ dB above local noise floor)
@@ -138,23 +144,77 @@ document.addEventListener('DOMContentLoaded', () => {
         if (dot) dot.className = `status-dot ${isConnected ? 'connected' : ''}`;
         if (text) text.textContent = statusText;
         const rxBtn = document.getElementById('rx-btn');
-        if (rxBtn) rxBtn.classList.toggle('active', isConnected && state.running);
+        if (rxBtn) rxBtn.classList.toggle('active', isConnected && state.running && !keyer.isTx());
+        updateTrxLeds();
     }
 
+    function updateTrxLeds() {
+        const rxBtn = document.getElementById('rx-btn');
+        const txBtn = document.getElementById('tx-btn');
+        const onAir = keyer.isTx();
+        if (rxBtn) rxBtn.classList.toggle('active', state.running && isActiveConnected() && !onAir);
+        if (txBtn) txBtn.classList.toggle('active', keyer.isKeyed());
+    }
+
+    function consumeTxChar() {
+        const el = document.getElementById('tx-text');
+        if (!el) return null;
+        const cleaned = sanitizeTxText(el.value);
+        if (cleaned !== el.value) el.value = cleaned;
+        if (!el.value.length) return null;
+        const ch = el.value[0];
+        const start = el.selectionStart | 0;
+        const end = el.selectionEnd | 0;
+        el.value = el.value.slice(1);
+        el.selectionStart = Math.max(0, start - 1);
+        el.selectionEnd = Math.max(0, end - 1);
+        return ch;
+    }
+    keyer.pullChar = consumeTxChar;
+
+    let wasTransmitting = false;
     function processRawIQ(int16IQ) {
         if (!state.running) return;
 
-        audioPlayer.pushFloatAudio(demodulator.process(int16IQ));
-
         const numComplex = int16IQ.length / 2;
-        const inv32768 = 1.0 / 32768.0;
+        const txTextEl = document.getElementById('tx-text');
+        const hasText = !!(txTextEl && txTextEl.value.length);
+        const useTx = state.modulation === 'cw' && keyer.willTransmit(hasText);
 
-        for (let i = 0; i < numComplex; i++) {
-            ringReal[ringHead] = int16IQ[i * 2] * inv32768;
-            ringImag[ringHead] = int16IQ[i * 2 + 1] * inv32768;
-            ringHead = ringHead === RING_SIZE - 1 ? 0 : ringHead + 1;
+        if (useTx !== wasTransmitting) {
+            ringHead = 0;
+            samplesAvailable = 0;
+            resetQrssAcc();
+            if (useTx) cwDecoder.reset();
+            waterfall.setShowPassband(!useTx);
         }
-        samplesAvailable += numComplex;
+        wasTransmitting = useTx;
+
+        if (useTx) {
+            const nAudio = demodulator.decimate2 ? numComplex >> 1 : numComplex;
+            keyer.render(
+                nAudio, demodulator.audioRate,
+                numComplex, demodulator.iqRate,
+                state.cwOffset, state.tunedFreq - state.centerFreq
+            );
+            audioPlayer.pushFloatAudio(keyer.audioOut);
+            for (let i = 0; i < numComplex; i++) {
+                ringReal[ringHead] = keyer.iqI[i];
+                ringImag[ringHead] = keyer.iqQ[i];
+                ringHead = ringHead === RING_SIZE - 1 ? 0 : ringHead + 1;
+            }
+            samplesAvailable += numComplex;
+        } else {
+            audioPlayer.pushFloatAudio(demodulator.process(int16IQ));
+
+            const inv32768 = 1.0 / 32768.0;
+            for (let i = 0; i < numComplex; i++) {
+                ringReal[ringHead] = int16IQ[i * 2] * inv32768;
+                ringImag[ringHead] = int16IQ[i * 2 + 1] * inv32768;
+                ringHead = ringHead === RING_SIZE - 1 ? 0 : ringHead + 1;
+            }
+            samplesAvailable += numComplex;
+        }
 
         const hopDiv = state.qrssEnabled ? 2 : Math.max(1, state.speedMultiplier);
         const hopSize = Math.max(128, Math.floor(state.fftSize / hopDiv));
@@ -194,6 +254,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             samplesAvailable -= hopSize;
         }
+        updateTrxLeds();
     }
 
     function resetIqPipeline() {
@@ -299,6 +360,22 @@ document.addEventListener('DOMContentLoaded', () => {
     waterfall.onTuneCallback = (newFreq) => {
         setTunedFrequency(newFreq, true);
     };
+    waterfall.onBandwidthCallback = (direction) => {
+        if (state.modulation === 'cw') {
+            const el = document.getElementById('cw-bw-slider');
+            if (!el) return;
+            const next = Math.max(50, Math.min(350, state.cwBandwidth + direction * 10));
+            if (next === state.cwBandwidth) return;
+            el.value = String(next);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+        } else {
+            const el = document.getElementById('ssb-high-slider');
+            if (!el) return;
+            const next = state.ssbHigh + direction * 10;
+            el.value = String(next);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+    };
     waterfall.onPanCallback = (deltaHz) => {
         if (source.protocol !== 'kiwi') {
             waterfall.panOffset += deltaHz;
@@ -401,6 +478,15 @@ document.addEventListener('DOMContentLoaded', () => {
         setTunedFrequency(state.tunedFreq, false, false);
         smeter.setModeInfo(state.modulation, state.cwBandwidth);
         updateDecoderActive();
+        if (!cw) {
+            keyer.armed = false;
+            keyer.stopText = true;
+            keyer.abort();
+            wasTransmitting = false;
+            waterfall.setShowPassband(true);
+        }
+        updateTxUi();
+        updateTrxLeds();
     }
 
     function updateTopBarInfo() {
@@ -545,8 +631,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 connectActive();
             }
         } else {
+            keyer.abort();
+            keyer.stopText = true;
+            wasTransmitting = false;
+            waterfall.setShowPassband(true);
             audioPlayer.stop();
             smeter.reset();
+            updateTrxLeds();
         }
     });
 
@@ -792,6 +883,71 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function updateTxUi() {
+        const cw = state.modulation === 'cw';
+        const armBtn = document.getElementById('tx-arm-btn');
+        const txText = document.getElementById('tx-text');
+        const wpmSlider = document.getElementById('wpm-slider');
+        const txRow = document.getElementById('tx-row');
+        if (armBtn) {
+            armBtn.disabled = !cw;
+            armBtn.classList.toggle('armed', cw && keyer.armed);
+        }
+        if (txText) txText.disabled = !cw;
+        if (wpmSlider) wpmSlider.disabled = !cw;
+        if (txRow) txRow.classList.toggle('is-dimmed', !cw);
+    }
+
+    function setTxArmed(on) {
+        const cw = state.modulation === 'cw';
+        keyer.armed = cw && !!on;
+        keyer.stopText = !keyer.armed;
+        updateTxUi();
+    }
+
+    const txArmBtn = document.getElementById('tx-arm-btn');
+    if (txArmBtn) {
+        txArmBtn.addEventListener('click', () => {
+            if (state.modulation !== 'cw') return;
+            setTxArmed(!keyer.armed);
+        });
+    }
+
+    const txTextInput = document.getElementById('tx-text');
+    if (txTextInput) {
+        const applyTxSanitize = () => {
+            const caret = txTextInput.selectionStart | 0;
+            const before = txTextInput.value.slice(0, caret);
+            const cleaned = sanitizeTxText(txTextInput.value);
+            if (cleaned === txTextInput.value) return;
+            txTextInput.value = cleaned;
+            const pos = sanitizeTxText(before).length;
+            txTextInput.selectionStart = txTextInput.selectionEnd = pos;
+        };
+        applyTxSanitize();
+        txTextInput.addEventListener('input', applyTxSanitize);
+    }
+
+    const wpmSlider = document.getElementById('wpm-slider');
+    const wpmVal = document.getElementById('wpm-val');
+    if (wpmSlider) {
+        wpmSlider.addEventListener('input', (e) => {
+            state.wpm = parseInt(e.target.value, 10);
+            keyer.setWpm(state.wpm);
+            if (wpmVal) wpmVal.textContent = String(state.wpm);
+        });
+    }
+
+    document.querySelectorAll('input[name="iambic-mode"]').forEach((el) => {
+        el.addEventListener('change', () => {
+            if (!el.checked) return;
+            state.iambicMode = el.value === 'A' ? 'A' : 'B';
+            keyer.setIambicMode(state.iambicMode);
+        });
+    });
+
+    updateTxUi();
+
     // 11. Help Modal Dialog
     const helpBtn = document.getElementById('help-btn');
     const helpModal = document.getElementById('help-modal');
@@ -807,9 +963,21 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // 12. Global Keyboard Shortcuts
+    const PADDLE_KEYS = { F8: 'dit', F9: 'dah', F4: 'straight' };
+
     window.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             closeHelp();
+            return;
+        }
+
+        const paddle = PADDLE_KEYS[e.key];
+        if (paddle) {
+            e.preventDefault();
+            if (e.repeat) return;
+            if (state.modulation !== 'cw') return;
+            if (paddle === 'straight') keyer.setStraight(true);
+            else keyer.setPaddle(paddle, true);
             return;
         }
 
@@ -854,6 +1022,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    window.addEventListener('keyup', (e) => {
+        const paddle = PADDLE_KEYS[e.key];
+        if (!paddle) return;
+        e.preventDefault();
+        if (paddle === 'straight') keyer.setStraight(false);
+        else keyer.setPaddle(paddle, false);
+    });
+
     // Unlock Web Audio on any initial interaction
     const unlockAudio = () => {
         audioPlayer.resume();
@@ -881,6 +1057,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ['primaryTheme', 'theme-select', 'change'],
         ['agcSpeed', 'agc-select', 'change'],
         ['filterKernel', 'kernel-select', 'change'],
+        ['wpm', 'wpm-slider', 'input'],
     ];
 
     function saveSettings() {
@@ -888,6 +1065,7 @@ document.addEventListener('DOMContentLoaded', () => {
         for (const [key] of SETTINGS) out[key] = state[key];
         out.filterEnabled = state.filterEnabled;
         out.qrssEnabled = state.qrssEnabled;
+        out.iambicMode = state.iambicMode;
         out.selectedSourceId = state.selectedSourceId;
         const kiwiUrlEl = document.getElementById('kiwi-url');
         if (kiwiUrlEl) out.kiwiUrl = kiwiUrlEl.value;
@@ -908,6 +1086,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (saved.filterEnabled !== undefined && saved.filterEnabled !== state.filterEnabled) cwFilterToggle.click();
         if (saved.qrssEnabled !== undefined && saved.qrssEnabled !== state.qrssEnabled) setQrssEnabled(!!saved.qrssEnabled);
+        if (saved.iambicMode === 'A' || saved.iambicMode === 'B') {
+            const el = document.querySelector(`input[name="iambic-mode"][value="${saved.iambicMode}"]`);
+            if (el) {
+                el.checked = true;
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        }
         if (saved.selectedSourceId) {
             const el = document.querySelector(`input[name="iq-source"][value="${saved.selectedSourceId}"]`);
             if (el) el.checked = true;

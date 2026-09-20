@@ -8,8 +8,9 @@
  * - Dedicated vertical frequency ruler on the right edge.
  * - Passband highlighting with the reversed primary colormap (CW centred; USB above; LSB below).
  * - Dynamic real-time brightness & contrast adjustment across the entire waterfall history.
- * - Real-time full-history vertical zoom & pan with Ctrl + Mouse Wheel centered on cursor.
- * - Mouse Wheel tuning by selected step; Shift+wheel pans the frequency window; Ctrl+wheel zooms.
+ * - Real-time full-history vertical zoom & pan with Ctrl + wheel / Ctrl + left-drag, centred on cursor.
+ * - Mouse Wheel tuning by selected step; Shift+wheel / Shift+left-drag pans the frequency window; Ctrl+wheel zooms.
+ * - Ctrl+Shift+wheel / Ctrl+Shift+left-drag steps the demod bandwidth (CW BW or SSB high).
  * - Continuous left-click drag on waterfall for real-time tracking.
  * - requestAnimationFrame render loop that only draws when a slice arrived or the view changed
  *   (dirty flag), so an idle or powered-off receiver costs no GPU time. FPS counts real draws.
@@ -45,8 +46,11 @@ class HorizontalWaterfall {
         this.panOffset = 0.0; // in Hz from center
 
         // Interaction state
-        this.isTuningDrag = false;
-        this.isRulerDrag = false;
+        this.dragMode = null;         // 'tune' | 'zoom' | 'pan' | 'bw'
+        this.dragLastY = 0;
+        this.dragAnchorY = 0;
+        this.dragAnchorFreq = 0;
+        this.bwPixelAcc = 0;
         this.lastRulerY = 0;
 
         // Canvas elements
@@ -81,6 +85,8 @@ class HorizontalWaterfall {
         this.onFpsCallback = null;
         this.onTuneCallback = null;
         this.onPanCallback = null;
+        this.onBandwidthCallback = null;
+        this.showPassband = true;
 
         this.initDOM();
         this.initRenderer();
@@ -388,9 +394,12 @@ class HorizontalWaterfall {
         gl.uniform1f(this.uniforms.u_texYBottom, texYBottom);
         gl.uniform1f(this.uniforms.u_texYTop, texYTop);
 
-        const { lo, hi } = this.getPassbandEdges();
-        const pbMin = (lo - fullMinFreq) / this.sampleRate;
-        const pbMax = (hi - fullMinFreq) / this.sampleRate;
+        let pbMin = 2.0, pbMax = 2.0;
+        if (this.showPassband) {
+            const { lo, hi } = this.getPassbandEdges();
+            pbMin = (lo - fullMinFreq) / this.sampleRate;
+            pbMax = (hi - fullMinFreq) / this.sampleRate;
+        }
         gl.uniform1f(this.uniforms.u_pbMin, pbMin);
         gl.uniform1f(this.uniforms.u_pbMax, pbMax);
 
@@ -499,18 +508,21 @@ class HorizontalWaterfall {
 
     /**
      * Absolute passband edges for the inverted bar / ruler bracket.
-     * CW is shifted down by half the bandwidth so the bar sits on the Morse
-     * line instead of riding above it like USB.
+     * CW: ±cwBandwidth/2 around the Morse carrier (the VFO / arrow).
+     * USB: low..high above the dial; LSB: the mirrored interval below.
      */
     getPassbandEdges() {
-        let lo = this.tunedFreq + this.lowCut;
-        let hi = this.tunedFreq + this.highCut;
-        if (this.modulation === 'cw') {
-            const halfBw = (this.highCut - this.lowCut) / 2;
-            lo -= halfBw;
-            hi -= halfBw;
-        }
-        return { lo, hi };
+        return {
+            lo: this.tunedFreq + this.lowCut,
+            hi: this.tunedFreq + this.highCut
+        };
+    }
+
+    setShowPassband(on) {
+        const next = !!on;
+        if (next === this.showPassband) return;
+        this.showPassband = next;
+        this.refreshChrome();
     }
 
     /**
@@ -606,17 +618,19 @@ class HorizontalWaterfall {
             ctx.closePath();
             ctx.fill();
 
-            const { lo, hi } = this.getPassbandEdges();
-            const yTop = this.freqToY(hi);
-            const yBottom = this.freqToY(lo);
-            ctx.strokeStyle = '#e5c07b';
-            ctx.lineWidth = 2.5;
-            ctx.beginPath();
-            ctx.moveTo(4, yTop);
-            ctx.lineTo(0, yTop);
-            ctx.lineTo(0, yBottom);
-            ctx.lineTo(4, yBottom);
-            ctx.stroke();
+            if (this.showPassband) {
+                const { lo, hi } = this.getPassbandEdges();
+                const yTop = this.freqToY(hi);
+                const yBottom = this.freqToY(lo);
+                ctx.strokeStyle = '#e5c07b';
+                ctx.lineWidth = 2.5;
+                ctx.beginPath();
+                ctx.moveTo(4, yTop);
+                ctx.lineTo(0, yTop);
+                ctx.lineTo(0, yBottom);
+                ctx.lineTo(4, yBottom);
+                ctx.stroke();
+            }
         }
     }
 
@@ -671,6 +685,26 @@ class HorizontalWaterfall {
         this.refreshChrome();
     }
 
+    /**
+     * Zoom by `factor` while keeping `cursorFreq` on the same canvas Y.
+     * Factor > 1 zooms in (same convention as Ctrl+wheel: 1.25 / 0.8).
+     */
+    applyZoomAt(mouseY, cursorFreq, factor) {
+        const oldZoom = this.zoom;
+        const newZoom = Math.max(this.minZoom, Math.min(this.maxZoom, oldZoom * factor));
+        if (newZoom === oldZoom || !this.wfHeight) return;
+        this.zoom = newZoom;
+        const newSpan = this.sampleRate / newZoom;
+        const frac = mouseY / this.wfHeight;
+        this.panOffset = cursorFreq - this.centerFreq - newSpan * (0.5 - frac);
+        this.clampPan();
+        this.refreshChrome();
+    }
+
+    notifyBandwidth(direction) {
+        if (this.onBandwidthCallback && direction) this.onBandwidthCallback(direction);
+    }
+
     attachEvents() {
         window.addEventListener('resize', () => this.resize());
         // The container can change size without a window resize (bottom panel reflow, font load);
@@ -697,59 +731,76 @@ class HorizontalWaterfall {
             }
         };
 
-        // 1. Maintaining left click on main screen (live dragging to move ribbon in real-time)
-        this.wfCanvas.addEventListener('mousedown', (e) => {
-            if (e.button === 0) {
-                this.isTuningDrag = true;
-                handleTuneFromEvent(e);
-            }
-        });
+        const dragModeFromEvent = (e, onRuler) => {
+            if (e.ctrlKey && e.shiftKey) return 'bw';
+            if (e.ctrlKey) return 'zoom';
+            if (e.shiftKey) return 'pan';
+            return onRuler ? 'pan' : 'tune';
+        };
+
+        const beginDrag = (e, onRuler) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            this.dragMode = dragModeFromEvent(e, onRuler);
+            this.dragLastY = e.clientY;
+            this.dragAnchorY = Math.max(0, Math.min(this.wfHeight, canvasY(e)));
+            this.dragAnchorFreq = this.yToFreq(this.dragAnchorY);
+            this.bwPixelAcc = 0;
+            this.lastRulerY = e.clientY;
+            if (this.dragMode === 'tune') handleTuneFromEvent(e);
+        };
+
+        this.wfCanvas.addEventListener('mousedown', (e) => beginDrag(e, false));
+        this.rulerCanvas.addEventListener('mousedown', (e) => beginDrag(e, true));
 
         window.addEventListener('mousemove', (e) => {
-            if (this.isTuningDrag) {
+            if (!this.dragMode) return;
+            const dy = e.clientY - this.dragLastY;
+            this.dragLastY = e.clientY;
+            if (this.dragMode === 'tune') {
                 handleTuneFromEvent(e);
-            } else if (this.isRulerDrag) {
-                const dy = e.clientY - this.lastRulerY;
-                this.lastRulerY = e.clientY;
+            } else if (this.dragMode === 'pan') {
                 this.panByPixels(dy);
+            } else if (this.dragMode === 'zoom') {
+                // ~48 px ≈ one wheel notch (1.25 / 0.8). Drag up zooms in.
+                const factor = Math.exp(-dy * Math.log(1.25) / 48);
+                this.applyZoomAt(this.dragAnchorY, this.dragAnchorFreq, factor);
+            } else if (this.dragMode === 'bw') {
+                this.bwPixelAcc += -dy;
+                while (this.bwPixelAcc >= 32) {
+                    this.notifyBandwidth(1);
+                    this.bwPixelAcc -= 32;
+                }
+                while (this.bwPixelAcc <= -32) {
+                    this.notifyBandwidth(-1);
+                    this.bwPixelAcc += 32;
+                }
             }
         });
 
         window.addEventListener('mouseup', () => {
-            this.isTuningDrag = false;
-            this.isRulerDrag = false;
+            this.dragMode = null;
+            this.bwPixelAcc = 0;
         });
 
-        // 2. Mouse Wheel: tune (plain), pan view (Shift), or zoom (Ctrl)
+        // Wheel: Ctrl+Shift = bandwidth, Ctrl = zoom, Shift = pan, else VFO step
         const handleWheel = (e) => {
             e.preventDefault();
 
-            if (e.ctrlKey) {
-                // CTRL + Mouse Wheel: Zoom in / Zoom out centered on cursor frequency
+            if (e.ctrlKey && e.shiftKey) {
+                const direction = e.deltaY < 0 ? 1 : -1;
+                this.notifyBandwidth(direction);
+            } else if (e.ctrlKey) {
                 const mouseY = Math.max(0, Math.min(this.wfHeight, canvasY(e)));
                 const cursorFreq = this.yToFreq(mouseY);
-
                 const factor = e.deltaY < 0 ? 1.25 : 0.8;
-                const oldZoom = this.zoom;
-                const newZoom = Math.max(this.minZoom, Math.min(this.maxZoom, oldZoom * factor));
-
-                if (newZoom !== oldZoom) {
-                    this.zoom = newZoom;
-                    const newSpan = this.sampleRate / newZoom;
-                    const frac = mouseY / this.wfHeight;
-                    // Maintain cursorFreq at exact same Y pixel
-                    this.panOffset = cursorFreq - this.centerFreq - newSpan * (0.5 - frac);
-                    this.clampPan();
-                    this.refreshChrome();
-                }
+                this.applyZoomAt(mouseY, cursorFreq, factor);
             } else if (e.shiftKey) {
-                // Shift + Mouse Wheel: pan the visible frequency window like dragging the ruler
                 let dy = e.deltaY;
                 if (e.deltaMode === 1) dy *= 16;
                 else if (e.deltaMode === 2) dy *= this.wfHeight;
                 this.panByPixels(dy);
             } else {
-                // Normal Mouse Wheel: Tune frequency according to selected step
                 const direction = e.deltaY < 0 ? 1 : -1;
                 const delta = direction * this.stepSize;
                 const newFreq = Math.round((this.tunedFreq + delta) / this.stepSize) * this.stepSize;
@@ -764,14 +815,6 @@ class HorizontalWaterfall {
 
         this.wfCanvas.addEventListener('wheel', handleWheel, { passive: false });
         this.rulerCanvas.addEventListener('wheel', handleWheel, { passive: false });
-
-        // Vertical dragging on ruler to pan frequency scale
-        this.rulerCanvas.addEventListener('mousedown', (e) => {
-            if (e.button === 0) {
-                this.isRulerDrag = true;
-                this.lastRulerY = e.clientY;
-            }
-        });
     }
 
     clear() {

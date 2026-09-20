@@ -132,7 +132,7 @@
                     </div>
                     <div class="control-group slider-container">
                         <label for="speed-slider">WF Speed:</label>
-                        <input id="speed-slider" type="range" min="1" max="6" step="1" value="3">
+                        <input id="speed-slider" type="range" min="1" max="8" step="1" value="3">
                         <span id="speed-val" class="slider-val">3x</span>
                     </div>
                     <div class="control-group">
@@ -152,6 +152,9 @@
                             <option value="strong">Strong</option>
                         </select>
                     </div>
+                    <div class="control-group">
+                        <button id="qrss-toggle" class="toggle-btn" title="Slow waterfall: Blackman window and averaged FFT bins. WF Speed sets integration time.">QRSS: OFF</button>
+                    </div>
                 </div>
 
                 <div class="wconfig-section" id="cw-config-section">
@@ -165,6 +168,13 @@
                         <label for="cw-bw-slider">CW BW:</label>
                         <input id="cw-bw-slider" type="range" min="50" max="350" step="10" value="150">
                         <span id="cw-bw-val" class="slider-val">150 Hz</span>
+                    </div>
+                    <div class="control-group" id="iambic-container">
+                        <label>Iambic:</label>
+                        <div class="radio-group" title="Iambic A finishes the current element on squeeze-release. Iambic B also sends the opposite element.">
+                            <label class="radio-label"><input type="radio" name="iambic-mode" value="A"> A</label>
+                            <label class="radio-label"><input type="radio" name="iambic-mode" value="B" checked> B</label>
+                        </div>
                     </div>
                 </div>
 
@@ -247,23 +257,11 @@
 
         <!-- 3. BOTTOM PANEL: CONTROLS & INFORMATION -->
         <footer id="bottom-panel">
-            <!-- Row 1: Frequency Dial, Modes, Step, and Theme -->
-            <div class="control-row">
-                <!-- Analog Mechanical Drum Frequency Dial (SDRangelove style) -->
-                <div class="control-group">
-                    <span class="group-label">VFO:</span>
-                    <div id="freq-dial-container"></div>
-                </div>
-
-                <!-- Demodulation Mode + Tuning Step -->
-                <div class="control-cluster">
+            <div class="control-row control-row-main">
+                <div class="control-cluster control-left">
                     <div class="control-group">
-                        <span class="group-label">Mode:</span>
-                        <div class="btn-group">
-                            <button class="btn mode-btn active" data-mode="cw">CW</button>
-                            <button class="btn mode-btn" data-mode="usb">USB</button>
-                            <button class="btn mode-btn" data-mode="lsb">LSB</button>
-                        </div>
+                        <span class="group-label">VFO:</span>
+                        <div id="freq-dial-container"></div>
                     </div>
                     <div class="control-group">
                         <span class="group-label">Step:</span>
@@ -275,24 +273,27 @@
                             <option value="5000">5 kHz</option>
                         </select>
                     </div>
-                </div>
-
-                <!-- Colormap Theme Selector -->
-                <div class="control-group">
-                    <span class="group-label">Colormap:</span>
-                    <select id="theme-select" class="select-input"></select>
-                </div>
-            </div>
-
-            <!-- Row 2: Volume, AGC, CW Filter, QRSS -->
-            <div class="control-row">
-                <!-- Audio: Volume + AGC -->
-                <div class="control-cluster">
-                    <div class="control-group slider-container">
-                        <label for="vol-slider">Volume:</label>
-                        <input id="vol-slider" type="range" min="0" max="1" step="0.01" value="0.8">
-                        <span id="vol-val" class="slider-val">80%</span>
+                    <div class="control-group">
+                        <span class="group-label">Mode:</span>
+                        <div class="btn-group">
+                            <button class="btn mode-btn active" data-mode="cw">CW</button>
+                            <button class="btn mode-btn" data-mode="usb">USB</button>
+                            <button class="btn mode-btn" data-mode="lsb">LSB</button>
+                        </div>
                     </div>
+                </div>
+
+                <div class="control-cluster control-center">
+                    <div class="control-group">
+                        <span class="group-label">Colormap:</span>
+                        <select id="theme-select" class="select-input"></select>
+                    </div>
+                    <div class="control-group">
+                        <button id="cw-filter-toggle" class="toggle-btn active" title="Toggle CW Adaptive IIR Noise Squelch & Sharpening">CW Filter: ON</button>
+                    </div>
+                </div>
+
+                <div class="control-cluster control-right">
                     <div class="control-group">
                         <span class="group-label">AGC:</span>
                         <select id="agc-select" class="select-input" title="AGC Response Speed">
@@ -301,16 +302,24 @@
                             <option value="slow">Slow</option>
                         </select>
                     </div>
+                    <div class="control-group slider-container">
+                        <label for="vol-slider">Volume:</label>
+                        <input id="vol-slider" type="range" min="0" max="1" step="0.01" value="0.8">
+                        <span id="vol-val" class="slider-val">80%</span>
+                    </div>
                 </div>
+            </div>
 
-                <!-- CW Filter + QRSS -->
-                <div class="control-cluster">
-                    <div class="control-group">
-                        <button id="cw-filter-toggle" class="toggle-btn active" title="Toggle CW Adaptive IIR Noise Squelch & Sharpening">CW Filter: ON</button>
-                    </div>
-                    <div class="control-group">
-                        <button id="qrss-toggle" class="toggle-btn" title="Slow waterfall: Blackman window and averaged FFT bins. WF Speed sets integration time.">QRSS: OFF</button>
-                    </div>
+            <div class="control-row control-row-tx" id="tx-row">
+                <button id="tx-arm-btn" class="tx-arm-btn" title="Arm keyboard CW. RX stays on until you type or a buffered line is sent.">
+                    TRANSMIT
+                </button>
+                <input id="tx-text" class="tx-text-input" type="text" spellcheck="false" autocomplete="off" autocapitalize="off"
+                       placeholder="Type ahead to send CW…" aria-label="CW transmit text">
+                <div class="control-group slider-container tx-wpm-group">
+                    <label for="wpm-slider">WPM:</label>
+                    <input id="wpm-slider" type="range" min="10" max="40" step="1" value="20">
+                    <span id="wpm-val" class="slider-val">20</span>
                 </div>
             </div>
         </footer>
@@ -344,10 +353,10 @@
                 <section class="help-section">
                     <h3>Config</h3>
                     <p class="help-text">
-                        Open Config for waterfall levels, WF Speed (1x–6x STFT overlap), CW BFO/BW,
-                        and USB/LSB low/high (default 200–2700 Hz). QRSS (next to CW Filter) switches
-                        the FFT to a Blackman window and averages successive spectra so slow Morse
-                        stands out; WF Speed then sets how long each column integrates.
+                        Open Config for waterfall levels, WF Speed (1x–8x STFT overlap), CW BFO/BW,
+                        iambic A/B, and USB/LSB low/high (default 200–2700 Hz). QRSS (in the WATERFALL
+                        section) switches the FFT to a Blackman window and averages successive spectra
+                        so slow Morse stands out; WF Speed then sets how long each column integrates.
                     </p>
                 </section>
 
@@ -355,10 +364,11 @@
                     <h3>Mouse behaviours</h3>
                     <ul>
                         <li><strong>Mouse Wheel:</strong> Move the VFO up and down according to the frequency step selected.</li>
-                        <li><strong>CTRL + Mouse Wheel:</strong> Zoom the waterfall, centred on the cursor.</li>
-                        <li><strong>SHIFT + Mouse Wheel:</strong> Move the waterfall up and down (on live Kiwi this slides the 12 kHz DDC).</li>
+                        <li><strong>CTRL + Mouse Wheel / CTRL + Left Drag:</strong> Zoom the waterfall, centred on the cursor.</li>
+                        <li><strong>SHIFT + Mouse Wheel / SHIFT + Left Drag:</strong> Pan the waterfall up and down (on live Kiwi this slides the 12 kHz DDC).</li>
+                        <li><strong>CTRL + SHIFT + Wheel / Drag:</strong> Step CW bandwidth, or USB/LSB High when in SSB.</li>
                         <li><strong>Left Click on Waterfall:</strong> Move the VFO to the selected frequency (hold and drag to track).</li>
-                        <li><strong>Left Click on the Ruler:</strong> Drag to move the waterfall up and down.</li>
+                        <li><strong>Left Click on the Ruler:</strong> Drag to pan the waterfall up and down.</li>
                     </ul>
                 </section>
 
@@ -372,7 +382,24 @@
                         <div><kbd>Home</kbd> / <kbd>End</kbd></div><div>Zoom Min / Zoom Max</div>
                         <div><kbd>+</kbd> / <kbd>-</kbd></div><div>Change the step (10 Hz &rarr; 5 kHz)</div>
                         <div><kbd>Esc</kbd></div><div>Close this Help dialog</div>
+                        <div><kbd>F8</kbd></div><div>CW dit paddle (local sidetone)</div>
+                        <div><kbd>F9</kbd></div><div>CW dah paddle (iambic squeeze with F8)</div>
+                        <div><kbd>F4</kbd></div><div>CW straight key (tone while held)</div>
                     </div>
+                </section>
+
+                <section class="help-section">
+                    <h3>Local CW transmit</h3>
+                    <p class="help-text">
+                        CW mode only, local audio and waterfall — nothing is sent to the server yet.
+                        <strong>TRANSMIT</strong> arms the typeahead line (bright red) without muting RX.
+                        Typing, or clicking TRANSMIT with text already in the box, keys a sidetone at the
+                        CW BFO and paints the VFO on the waterfall. The buffer grows if you type faster
+                        than Morse; when it empties, RX returns after one extra letter-space (no RX between
+                        letters). Click TRANSMIT again to disarm; remaining text stays in the box.
+                        F8/F9 are an iambic paddle (mode A/B in Config, B default); F4 is a straight key.
+                        Paddles work even when TRANSMIT is not armed.
+                    </p>
                 </section>
 
                 <section class="help-section">
@@ -411,6 +438,7 @@
     <script src="js/connection.js"></script>
     <script src="js/sources.js"></script>
     <script src="js/kiwi.js"></script>
+    <script src="js/cw_keyer.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>
