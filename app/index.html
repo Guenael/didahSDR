@@ -27,40 +27,35 @@
                         <span class="trx-label">TX</span>
                     </button>
                 </div>
-                
-                <!-- Source selector (replay / live Kiwi) -->
+            </div>
+
+            <div class="top-bar-right">
+                <button id="wconfig-btn" class="smeter-btn" title="Settings">
+                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.8 1.8 0 0 1 0 2.6 1.8 1.8 0 0 1-2.6 0l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a1.8 1.8 0 0 1-1.8 1.8h-1a1.8 1.8 0 0 1-1.8-1.8v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a1.8 1.8 0 0 1-2.6 0 1.8 1.8 0 0 1 0-2.6l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4A1.8 1.8 0 0 1 2.2 13v-1A1.8 1.8 0 0 1 4 10.2h.2a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a1.8 1.8 0 0 1 0-2.6 1.8 1.8 0 0 1 2.6 0l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V4A1.8 1.8 0 0 1 11 2.2h1A1.8 1.8 0 0 1 13.8 4v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a1.8 1.8 0 0 1 2.6 0 1.8 1.8 0 0 1 0 2.6l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6h.2A1.8 1.8 0 0 1 21.8 11v1a1.8 1.8 0 0 1-1.8 1.8h-.2a1 1 0 0 0-.4 1.2"></path></svg>
+                    <span>Setting</span>
+                </button>
+
                 <button id="source-btn" class="smeter-btn" title="Select IQ source">
                     <span class="smeter-icon">📡</span>
                     <span>Source</span>
                 </button>
-            </div>
 
-            <div class="top-bar-right">
-                <!-- S-Meter Toggle Button -->
                 <button id="smeter-btn" class="smeter-btn active" title="Toggle SNR S-Meter Window">
                     <span class="smeter-icon">📶</span>
                     <span>S-Meter</span>
                 </button>
 
-                <!-- Config Window Toggle Button -->
-                <button id="wconfig-btn" class="smeter-btn" title="Toggle Config Window">
-                    <span class="smeter-icon">🎚️</span>
-                    <span>Config</span>
-                </button>
-
-                <!-- CW Decoder Window Toggle Button -->
                 <button id="decoder-btn" class="smeter-btn" title="Toggle CW Decoder Window">
                     <span class="smeter-icon">🔤</span>
                     <span>Decoder</span>
                 </button>
 
-                <!-- Audio Start / Unmute Button for browser autoplay policies -->
                 <button id="audio-btn" class="audio-toggle-btn need-start" title="Audio Status (Click to start/mute)">
                     <span id="audio-icon">🔊</span>
                     <span id="audio-text">Start Audio</span>
                 </button>
 
-                <div class="status-badge">
+                <div class="info-item status-badge">
                     <span id="status-dot" class="status-dot"></span>
                     <span id="status-text">Connecting...</span>
                 </div>
@@ -68,7 +63,6 @@
                 <div id="sample-rate-badge" class="info-item">SR: 96 kHz</div>
                 <div id="fps-badge" class="info-item">0 FPS</div>
 
-                <!-- Help Button -->
                 <button id="help-btn" class="help-btn" title="View Quick Guide & Shortcuts">? Help</button>
             </div>
         </header>
@@ -270,14 +264,17 @@
                     </label>
                     <div class="source-kiwi-fields">
                         <div class="source-kiwi-row">
-                            <input type="text" id="kiwi-url" class="source-url-input" value="http://f4kiy.ddns.net:8073"
+                            <input type="text" id="kiwi-url" class="source-url-input" value="http://oh5ae.dyndns.org:8073"
                                    spellcheck="false" autocomplete="off" autocapitalize="off" inputmode="url"
-                                   placeholder="http://f4kiy.ddns.net:8073" aria-label="KiwiSDR URL">
+                                   placeholder="http://oh5ae.dyndns.org:8073" aria-label="KiwiSDR URL">
                             <button type="button" id="kiwi-connect-btn" class="source-connect-btn" title="Connect to this KiwiSDR">Connect</button>
                         </div>
                         <p id="kiwi-url-hint" class="source-url-hint">
-                            Example: <code>http://f4kiy.ddns.net:8073</code>.
-                            <code>http://</code> or <code>https://</code> is stripped; host and port are used for the SND stream.
+                            Example:<br>
+                            - <code>http://f4kiy.ddns.net:8073</code><br>
+                            - <code>http://oh5ae.dyndns.org:8073</code><br>
+                            Map of the KiwiSDR receivers:<br>
+                            <a href="http://rx.linkfanel.net/" target="_blank" rel="noopener noreferrer">http://rx.linkfanel.net/</a>
                         </p>
                     </div>
                 </div>
@@ -342,7 +339,7 @@
 
             <div class="control-row control-row-tx" id="tx-row">
                 <button id="tx-arm-btn" class="tx-arm-btn" title="Arm keyboard CW. RX stays on until you type or a buffered line is sent.">
-                    TRANSMIT
+                    PTT Off
                 </button>
                 <input id="tx-text" class="tx-text-input" type="text" spellcheck="false" autocomplete="off" autocapitalize="off"
                        placeholder="Type ahead to send CW…" aria-label="CW transmit text">
@@ -376,7 +373,8 @@
                         Open the Source window to switch between VA2GKA Replay (local 96 kHz recording),
                         a local sound card (stereo IQ at 48 / 96 / 192 kHz, centre 0 Hz),
                         and a live KiwiSDR (12 kHz IQ). Paste the receiver web address, for example
-                        <code>http://f4kiy.ddns.net:8073</code>. On live Kiwi the waterfall is a
+                        <code>http://oh5ae.dyndns.org:8073</code>
+                        or <code>http://f4kiy.ddns.net:8073</code>. On live Kiwi the waterfall is a
                         12 kHz zoom; tuning past the edges or Shift+wheel / ruler-drag slides the Kiwi DDC.
                         Sound-card IQ uses the same DSP as Replay; tick <strong>Swap I/Q</strong> if the
                         spectrum is reversed. Enable asks for 96 kHz, then 48, then 192 (browsers do not
@@ -417,9 +415,9 @@ ffmpeg -re -stream_loop -1 -i samples/SAMPLE2.wav \
                 </section>
 
                 <section class="help-section">
-                    <h3>Config</h3>
+                    <h3>Settings</h3>
                     <p class="help-text">
-                        Open Config for waterfall levels, WF Speed (1x–8x STFT overlap), CW BFO/BW,
+                        Open the gear button for waterfall levels, WF Speed (1x–8x STFT overlap), CW BFO/BW,
                         iambic A/B, and USB/LSB low/high (default 200–2700 Hz). QRSS (in the WATERFALL
                         section) switches the FFT to a Blackman window and averages successive spectra
                         so slow Morse stands out; WF Speed then sets how long each column integrates.
@@ -457,14 +455,17 @@ ffmpeg -re -stream_loop -1 -i samples/SAMPLE2.wav \
                 <section class="help-section">
                     <h3>Local CW transmit</h3>
                     <p class="help-text">
-                        CW mode only, local audio and waterfall — nothing is sent to the server yet.
-                        <strong>TRANSMIT</strong> arms the typeahead line (bright red) without muting RX.
-                        Typing, or clicking TRANSMIT with text already in the box, keys a sidetone at the
-                        CW BFO and paints the VFO on the waterfall. The buffer grows if you type faster
-                        than Morse; when it empties, RX returns after one extra letter-space (no RX between
-                        letters). Click TRANSMIT again to disarm; remaining text stays in the box.
-                        F8/F9 are an iambic paddle (mode A/B in Config, B default); F4 is a straight key.
-                        Paddles work even when TRANSMIT is not armed.
+                        CW mode only, local sidetone — nothing is sent to the server yet.
+                        The waterfall freezes while you key (the history from before TX stays on screen)
+                        and RX audio is muted. Sidetone is generated on the audio clock so F8/F9/F4
+                        track the paddles without the receive jitter buffer.
+                        <strong>PTT Off</strong> / <strong>PTT On</strong> arms the typeahead line (bright red).
+                        Typing, or clicking PTT On with text already in the box, keys a sidetone at the
+                        CW BFO. The buffer grows if you type faster than Morse; when it empties, RX
+                        returns after one extra letter-space (no RX between letters). Click PTT On
+                        again to disarm (PTT Off); remaining text stays in the box.
+                        F8/F9 are an iambic paddle (mode A/B in Settings, B default); F4 is a straight key.
+                        Paddles work even when PTT is not armed.
                     </p>
                 </section>
 
@@ -498,14 +499,14 @@ ffmpeg -re -stream_loop -1 -i samples/SAMPLE2.wav \
     <script src="js/floating_window.js"></script>
     <script src="js/value_dial.js"></script>
     <script src="js/waterfall.js"></script>
-    <script src="js/audio.js"></script>
+    <script src="js/audio.js?v=2"></script>
     <script src="js/smeter.js"></script>
     <script src="js/cw_decoder.js"></script>
     <script src="js/connection.js"></script>
     <script src="js/sources.js"></script>
     <script src="js/kiwi.js"></script>
     <script src="js/soundcard.js"></script>
-    <script src="js/cw_keyer.js"></script>
-    <script src="js/app.js"></script>
+    <script src="js/cw_keyer.js?v=2"></script>
+    <script src="js/app.js?v=2"></script>
 </body>
 </html>

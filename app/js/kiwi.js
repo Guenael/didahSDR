@@ -10,7 +10,7 @@ const KIWI_SND_FLAG_STEREO = 0x08;
 const KIWI_GPS_BYTES = 10;
 const KIWI_SND_HEADER = 7; // flags u8 + seq u32le + smeter u16be
 const KIWI_DEFAULT_PORT = 8073;
-const KIWI_EXAMPLE_URL = 'http://f4kiy.ddns.net:8073';
+const KIWI_EXAMPLE_URL = 'http://oh5ae.dyndns.org:8073';
 
 function kiwiHostForUrl(host) {
     return host.indexOf(':') >= 0 ? `[${host}]` : host;

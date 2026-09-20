@@ -69,10 +69,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const keyer = new CwKeyer();
     keyer.setWpm(state.wpm);
     keyer.setIambicMode(state.iambicMode);
+    let workletTx = false;
+    let workletKeyed = false;
+    let txTextGen = 0;
 
     // 4. Initialize Web Audio Player
     const audioPlayer = new WebAudioPlayer();
     audioPlayer.setVolume(state.volume);
+    audioPlayer.setKeyerWpm(state.wpm);
+    audioPlayer.setKeyerIambic(state.iambicMode);
+    audioPlayer.setSidetoneHz(state.cwOffset);
     audioPlayer.extraStats = () => {
         const agc = demodulator.agc;
         return { noiseFloor: agc.noiseFloor.toExponential(1), gain: agc.gNext.toFixed(1), fft: state.fftSize, speed: state.speedMultiplier };
@@ -145,16 +151,24 @@ document.addEventListener('DOMContentLoaded', () => {
         if (dot) dot.className = `status-dot ${isConnected ? 'connected' : ''}`;
         if (text) text.textContent = statusText;
         const rxBtn = document.getElementById('rx-btn');
-        if (rxBtn) rxBtn.classList.toggle('active', isConnected && state.running && !keyer.isTx());
+        if (rxBtn) rxBtn.classList.toggle('active', isConnected && state.running && !isLocalTx());
         updateTrxLeds();
+    }
+
+    function paddleDown() {
+        return keyer.ditDown || keyer.dahDown || keyer.straightDown;
+    }
+
+    function isLocalTx() {
+        return state.modulation === 'cw' && (paddleDown() || workletTx);
     }
 
     function updateTrxLeds() {
         const rxBtn = document.getElementById('rx-btn');
         const txBtn = document.getElementById('tx-btn');
-        const onAir = keyer.isTx();
+        const onAir = isLocalTx();
         if (rxBtn) rxBtn.classList.toggle('active', state.running && isActiveConnected() && !onAir);
-        if (txBtn) txBtn.classList.toggle('active', keyer.isKeyed());
+        if (txBtn) txBtn.classList.toggle('active', workletKeyed || paddleDown());
     }
 
     function consumeTxChar() {
@@ -171,51 +185,71 @@ document.addEventListener('DOMContentLoaded', () => {
         el.selectionEnd = Math.max(0, end - 1);
         return ch;
     }
-    keyer.pullChar = consumeTxChar;
+
+    function syncKeyerText() {
+        const el = document.getElementById('tx-text');
+        txTextGen++;
+        audioPlayer.setKeyerText(el ? el.value : '', txTextGen);
+    }
+
+    function applyKeyerConsumed(consumed, gen) {
+        if (!consumed || (gen | 0) !== txTextGen) return;
+        const el = document.getElementById('tx-text');
+        if (!el) return;
+        if (el.value.startsWith(consumed)) {
+            const start = el.selectionStart | 0;
+            const end = el.selectionEnd | 0;
+            el.value = el.value.slice(consumed.length);
+            el.selectionStart = Math.max(0, start - consumed.length);
+            el.selectionEnd = Math.max(0, end - consumed.length);
+        }
+    }
+
+    audioPlayer.onKeyerState = (m) => {
+        workletTx = !!m.tx;
+        workletKeyed = !!m.keyed;
+        if (m.consumed) applyKeyerConsumed(m.consumed, m.gen);
+        if (m.wantChar) {
+            const ch = consumeTxChar();
+            if (ch != null) audioPlayer.sendKeyerChar(ch);
+            else {
+                const el = document.getElementById('tx-text');
+                audioPlayer.setKeyerHasText(!!(el && el.value.length));
+            }
+        }
+        updateTrxLeds();
+    };
 
     let wasTransmitting = false;
     function processRawIQ(int16IQ) {
         if (!state.running) return;
 
-        const numComplex = int16IQ.length / 2;
-        const txTextEl = document.getElementById('tx-text');
-        const hasText = !!(txTextEl && txTextEl.value.length);
-        const useTx = state.modulation === 'cw' && keyer.willTransmit(hasText);
+        const useTx = isLocalTx();
 
         if (useTx !== wasTransmitting) {
             ringHead = 0;
             samplesAvailable = 0;
             resetQrssAcc();
+            audioPlayer.resetBuffer();
             if (useTx) cwDecoder.reset();
-            waterfall.setShowPassband(!useTx);
         }
         wasTransmitting = useTx;
 
         if (useTx) {
-            const nAudio = Math.max(1, Math.floor(numComplex / Math.max(1, demodulator.decim)));
-            keyer.render(
-                nAudio, demodulator.audioRate,
-                numComplex, demodulator.iqRate,
-                state.cwOffset, state.tunedFreq - state.centerFreq
-            );
-            audioPlayer.pushFloatAudio(keyer.audioOut);
-            for (let i = 0; i < numComplex; i++) {
-                ringReal[ringHead] = keyer.iqI[i];
-                ringImag[ringHead] = keyer.iqQ[i];
-                ringHead = ringHead === RING_SIZE - 1 ? 0 : ringHead + 1;
-            }
-            samplesAvailable += numComplex;
-        } else {
-            audioPlayer.pushFloatAudio(demodulator.process(int16IQ));
-
-            const inv32768 = 1.0 / 32768.0;
-            for (let i = 0; i < numComplex; i++) {
-                ringReal[ringHead] = int16IQ[i * 2] * inv32768;
-                ringImag[ringHead] = int16IQ[i * 2 + 1] * inv32768;
-                ringHead = ringHead === RING_SIZE - 1 ? 0 : ringHead + 1;
-            }
-            samplesAvailable += numComplex;
+            updateTrxLeds();
+            return;
         }
+
+        const numComplex = int16IQ.length / 2;
+        audioPlayer.pushFloatAudio(demodulator.process(int16IQ));
+
+        const inv32768 = 1.0 / 32768.0;
+        for (let i = 0; i < numComplex; i++) {
+            ringReal[ringHead] = int16IQ[i * 2] * inv32768;
+            ringImag[ringHead] = int16IQ[i * 2 + 1] * inv32768;
+            ringHead = ringHead === RING_SIZE - 1 ? 0 : ringHead + 1;
+        }
+        samplesAvailable += numComplex;
 
         const hopDiv = state.qrssEnabled ? 2 : Math.max(1, state.speedMultiplier);
         const hopSize = Math.max(128, Math.floor(state.fftSize / hopDiv));
@@ -559,8 +593,10 @@ document.addEventListener('DOMContentLoaded', () => {
             keyer.armed = false;
             keyer.stopText = true;
             keyer.abort();
+            audioPlayer.abortKeyer();
+            workletTx = false;
+            workletKeyed = false;
             wasTransmitting = false;
-            waterfall.setShowPassband(true);
         }
         updateTxUi();
         updateTrxLeds();
@@ -723,8 +759,10 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             keyer.abort();
             keyer.stopText = true;
+            audioPlayer.abortKeyer();
+            workletTx = false;
+            workletKeyed = false;
             wasTransmitting = false;
-            waterfall.setShowPassband(true);
             audioPlayer.stop();
             smeter.reset();
             if (source.protocol === 'soundcard' && sound) sound.stop();
@@ -896,6 +934,7 @@ document.addEventListener('DOMContentLoaded', () => {
             state.cwOffset = parseInt(e.target.value, 10);
             state.bfoPitch = state.cwOffset;
             if (cwOffsetVal) cwOffsetVal.textContent = `${state.cwOffset} Hz`;
+            audioPlayer.setSidetoneHz(state.cwOffset);
             setTunedFrequency(state.tunedFreq, false, false);
         });
     }
@@ -982,7 +1021,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const txRow = document.getElementById('tx-row');
         if (armBtn) {
             armBtn.disabled = !cw;
-            armBtn.classList.toggle('armed', cw && keyer.armed);
+            const armed = cw && keyer.armed;
+            armBtn.classList.toggle('armed', armed);
+            armBtn.textContent = armed ? 'PTT On' : 'PTT Off';
         }
         if (txText) txText.disabled = !cw;
         if (wpmSlider) wpmSlider.disabled = !cw;
@@ -993,6 +1034,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const cw = state.modulation === 'cw';
         keyer.armed = cw && !!on;
         keyer.stopText = !keyer.armed;
+        audioPlayer.setKeyerArmed(keyer.armed);
+        if (keyer.armed) syncKeyerText();
+        else audioPlayer.setKeyerHasText(false);
         updateTxUi();
     }
 
@@ -1016,7 +1060,10 @@ document.addEventListener('DOMContentLoaded', () => {
             txTextInput.selectionStart = txTextInput.selectionEnd = pos;
         };
         applyTxSanitize();
-        txTextInput.addEventListener('input', applyTxSanitize);
+        txTextInput.addEventListener('input', () => {
+            applyTxSanitize();
+            if (keyer.armed) syncKeyerText();
+        });
     }
 
     const wpmSlider = document.getElementById('wpm-slider');
@@ -1025,6 +1072,7 @@ document.addEventListener('DOMContentLoaded', () => {
         wpmSlider.addEventListener('input', (e) => {
             state.wpm = parseInt(e.target.value, 10);
             keyer.setWpm(state.wpm);
+            audioPlayer.setKeyerWpm(state.wpm);
             if (wpmVal) wpmVal.textContent = String(state.wpm);
         });
     }
@@ -1034,6 +1082,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!el.checked) return;
             state.iambicMode = el.value === 'A' ? 'A' : 'B';
             keyer.setIambicMode(state.iambicMode);
+            audioPlayer.setKeyerIambic(state.iambicMode);
         });
     });
 
@@ -1067,8 +1116,15 @@ document.addEventListener('DOMContentLoaded', () => {
             e.preventDefault();
             if (e.repeat) return;
             if (state.modulation !== 'cw') return;
-            if (paddle === 'straight') keyer.setStraight(true);
-            else keyer.setPaddle(paddle, true);
+            audioPlayer.resume();
+            if (paddle === 'straight') {
+                keyer.setStraight(true);
+                audioPlayer.setKeyerStraight(true);
+            } else {
+                keyer.setPaddle(paddle, true);
+                audioPlayer.setKeyerPaddle(paddle, true);
+            }
+            updateTrxLeds();
             return;
         }
 
@@ -1117,8 +1173,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const paddle = PADDLE_KEYS[e.key];
         if (!paddle) return;
         e.preventDefault();
-        if (paddle === 'straight') keyer.setStraight(false);
-        else keyer.setPaddle(paddle, false);
+        if (paddle === 'straight') {
+            keyer.setStraight(false);
+            audioPlayer.setKeyerStraight(false);
+        } else {
+            keyer.setPaddle(paddle, false);
+            audioPlayer.setKeyerPaddle(paddle, false);
+        }
+        updateTrxLeds();
     });
 
     // Unlock Web Audio on any initial interaction

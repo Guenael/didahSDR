@@ -21,7 +21,7 @@ Unlike traditional Web-SDR receivers that render vertical top-to-bottom waterfal
 - Place your 16-bit stereo IQ recording (WAV format) in the `samples/` directory or use the provided extract.
 - Launch the backend server:
   ```bash
-  python3 server/test_server.py --port 9000 --wav samples/SAMPLE_20120219_174346Z_14048kHz_RF.wav
+  python3 server/replay_server.py --port 9000 --wav samples/SAMPLE_20120219_174346Z_14048kHz_RF.wav
   ```
 - Open your browser and navigate to `http://localhost:9000`.
 - Click the **Power** button (top-left) to start the audio engine and stream reception.
@@ -130,7 +130,7 @@ Python Backend (aiohttp + NumPy + SciPy)
 │   │   └── waterfall.js      # Horizontal waterfall renderer & ruler
 │   └── index.html            # Single-page web application entrypoint
 ├── server/                   # Standalone Python backend
-│   └── test_server.py        # aiohttp IQ streamer and WebSocket server
+│   └── replay_server.py      # aiohttp IQ streamer and WebSocket server
 ├── tests/                    # Backend unit & integration test suite
 │   ├── __init__.py
 │   └── test_server.py        # Tests for WavIQLooper, AGC, and aiohttp app
@@ -169,7 +169,7 @@ The standalone server supports command-line arguments and optional environment v
 
 Example running on a custom port and frequency:
 ```bash
-python3 server/test_server.py --port 8080 --center-freq 14070000 --wav /path/to/20m_band.wav
+python3 server/replay_server.py --port 8080 --center-freq 14070000 --wav /path/to/20m_band.wav
 ```
 
 ## Development & Manual testing/debugging
@@ -184,7 +184,7 @@ python3 server/test_server.py --port 8080 --center-freq 14070000 --wav /path/to/
    ```
 2. Start the server with the included IQ sample:
    ```bash
-   python3 server/test_server.py
+   python3 server/replay_server.py
    ```
 3. Open your browser to `http://localhost:9000`.
 4. Inspect WebSocket messages and client DSP in browser developer tools (F12 > Console / Network > WS).
@@ -254,11 +254,11 @@ The container runs as an unprivileged user (`app`, UID 1000) on a minimal Debian
 
 ## CW decoder: possible improvements
 
-The neural CW decoder (`app/js/cw_decoder*.js`, model trained in `training/`, design in `PLAN3.md`) is a
+The neural CW decoder (`app/js/cw_decoder*.js`, model trained in the sibling repo `didahSDR-cw-training-model`, design in its `PLAN3.md`) is a
 first version. Observed on real traffic with v2: recognisable contest exchanges, but a CW operator still
 decodes more than the model does. Candidate improvements, grouped by where they live.
 
-### Training data (`training/didahcw/synth.py`, `text.py`)
+### Training data (training repo: `didahcw/synth.py`, `text.py`)
 
 - **Speed changes inside a message.** Contest operators send exchanges such as `5NN` or the serial number
   at a different speed than the callsign. The generator keys a whole message at one WPM, so these blocks
@@ -273,12 +273,12 @@ decodes more than the model does. Candidate improvements, grouped by where they 
   density typical of a contest. Two ways to explore: raise `p_qrm`/`qrm_max` as a curriculum phase after
   convergence, and add a same-frequency QRM mode with a small offset (0 to 30 Hz) and independent text.
 - **A real audio corpus.** All training data is synthetic. Even a few minutes of transcribed real
-  recordings in `training/eval/real/` would make the CER tables honest, expose generator gaps (word gap
+  recordings in the training repo's `eval/real/` would make the CER tables honest, expose generator gaps (word gap
   length was one), and could later be mixed into training as fine-tuning data.
 - **Word gaps.** v3 widens `word_gap_scale` down to 0.5 after seeing contest ops glue words together.
   Compare v2 and v3 on real clips before deciding the range.
 
-### Model and decoding (`training/didahcw/model.py`, `app/js/cw_decoder_worker.js`)
+### Model and decoding (training repo `didahcw/model.py`, `app/js/cw_decoder_worker.js`)
 
 - **Benchmark against DeepCW.** DeepCW publishes a CER heat map versus SNR and WPM in AWGN
   (`tmp/web-deep-cw-decoder/README.md`): 0 % CER down to -4 dB, under 1.5 % at -8 dB, under 8 % at -10 dB,

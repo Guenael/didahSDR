@@ -73,3 +73,38 @@ test('setInputRate(12000) resamples toward the context rate and resets the ring'
     e.render(out);
     assert.ok(Math.abs((before - e.buffered) - 120) < 8, `consumed ${before - e.buffered}, expected ~120 input samples`);
 });
+
+test('sidetone bypasses the RX jitter buffer', () => {
+    const renderSidetoneOrRx = DidahAudioEngine.renderSidetoneOrRx;
+    const engine = new DidahAudioEngine(48000, 48000);
+    const rx = new Float32Array(engine.targetBuffer);
+    rx.fill(0.9);
+    engine.push(rx);
+    const keyer = new CwKeyer();
+    keyer.setWpm(20);
+    keyer.setPaddle('dit', true);
+    const out = new Float32Array(128);
+    const txState = { wasTx: false };
+    const peak = renderSidetoneOrRx(txState, engine, keyer, out, 48000, 700, false);
+    assert.equal(txState.wasTx, true);
+    assert.ok(Math.abs(out[0]) < 0.05, 'first sample is the sidetone rise, not queued RX');
+    assert.ok(peak > 0.05, `sidetone peak ${peak}`);
+});
+
+test('leaving TX drops the RX ring so playback re-prebuffers', () => {
+    const renderSidetoneOrRx = DidahAudioEngine.renderSidetoneOrRx;
+    const engine = new DidahAudioEngine(48000, 48000);
+    engine.push(tone(engine.targetBuffer));
+    const keyer = new CwKeyer();
+    keyer.setWpm(20);
+    keyer.setPaddle('dit', true);
+    const out = new Float32Array(128);
+    const txState = { wasTx: false };
+    renderSidetoneOrRx(txState, engine, keyer, out, 48000, 700, false);
+    keyer.setPaddle('dit', false);
+    keyer.abort();
+    const peak = renderSidetoneOrRx(txState, engine, keyer, out, 48000, 700, false);
+    assert.equal(txState.wasTx, false);
+    assert.equal(engine.prebuffering, true);
+    assert.equal(peak, 0);
+});

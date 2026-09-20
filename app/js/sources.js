@@ -32,7 +32,7 @@ const SOURCES = [
         id: 'f4kiy',
         label: 'KiwiSDR Live',
         protocol: 'kiwi',
-        host: 'f4kiy.ddns.net',
+        host: 'oh5ae.dyndns.org',
         port: 8073,
         secure: false,
         password: '',

@@ -1,8 +1,9 @@
 /**
  * didahSDR - Local CW keyer (iambic A/B, straight key, Morse typeahead)
  *
- * Sample-accurate at the audio rate. render() also fills a matching IQ oscillator at
- * the VFO offset so the waterfall can reuse the existing FFT path.
+ * Sample-accurate at the audio rate. Sidetone is generated inside the AudioWorklet so
+ * paddle keys are not delayed by the RX jitter buffer. render() can also fill a matching
+ * IQ oscillator (used by tests; the live UI freezes the waterfall during TX).
  * No allocations once the output buffers have sized themselves to the packet.
  */
 
@@ -405,4 +406,10 @@ class CwKeyer {
     }
 }
 
+if (typeof globalThis !== 'undefined') {
+    globalThis.CwKeyer = CwKeyer;
+    globalThis.MORSE_TABLE = MORSE_TABLE;
+    globalThis.morseOf = morseOf;
+    globalThis.sanitizeTxText = sanitizeTxText;
+}
 if (typeof module !== 'undefined') module.exports = { CwKeyer, MORSE_TABLE, morseOf, sanitizeTxText };

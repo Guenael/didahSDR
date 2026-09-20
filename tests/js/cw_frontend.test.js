@@ -1,7 +1,8 @@
 'use strict';
 /**
- * Parity of the JS CW decoder front end with the Python reference (training/didahcw/frontend.py),
- * on the fixture written by training/tests/make_frontend_fixture.py.
+ * Parity of the JS CW decoder front end with the Python reference (didahcw/frontend.py in the
+ * didahSDR-cw-training-model repo). The fixture tests/fixtures/frontend_fixture.json is generated there by
+ * tests/make_frontend_fixture.py --sdr <path-to-this-repo>; regenerate it whenever the front-end spec changes.
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -9,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 require('./load.js');
 
-const FIXTURE = path.resolve(__dirname, '../../training/tests/fixtures/frontend_fixture.json');
+const FIXTURE = path.resolve(__dirname, '../fixtures/frontend_fixture.json');
 
 function run(frontend, i, q, chunk) {
     let produced = 0;
@@ -20,7 +21,7 @@ function run(frontend, i, q, chunk) {
     return produced;
 }
 
-test('fixture exists (run training/tests/make_frontend_fixture.py)', () => {
+test('fixture exists (see header for how to regenerate)', () => {
     assert.ok(fs.existsSync(FIXTURE), FIXTURE);
 });
 

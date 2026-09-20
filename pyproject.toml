@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-didahsdr = "server.test_server:main"
+didahsdr = "server.replay_server:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

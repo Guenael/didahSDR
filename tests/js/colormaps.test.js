@@ -30,15 +30,13 @@ test('unknown name falls back to viridis', () => {
     assert.equal(Colormaps.getTable('nope'), Colormaps.getTable('viridis'));
 });
 
-test('rocky RGB permutations are distinct 256-entry tables', () => {
-    const names = ['rocky-green', 'rocky-yellow', 'rocky-magenta', 'rocky-purple', 'rocky-teal'];
-    const src = Colormaps.getTable('rocky');
+test('tty is the rocky RGB permutation [0, 2, 1] as a packed table', () => {
+    const rocky = Colormaps.getTable('rocky');
+    const tty = Colormaps.getTable('tty');
+    assert.equal(tty.length, 256);
+    assert.notEqual(tty, rocky);
     const [sr, sg, sb] = Colormaps.getRgb('rocky', 255);
-    for (const name of names) {
-        const t = Colormaps.getTable(name);
-        assert.equal(t.length, 256, name);
-        assert.notEqual(t[255], src[255], name);
-    }
-    const [gr, gg, gb] = Colormaps.getRgb('rocky-green', 255);
-    assert.deepEqual([gr, gg, gb], [sg, sb, sr]);
+    const [tr, tg, tb] = Colormaps.getRgb('tty', 255);
+    assert.deepEqual([tr, tg, tb], [sr, sb, sg]);
+    assert.equal(tty[255] >>> 24, 0xff);
 });
