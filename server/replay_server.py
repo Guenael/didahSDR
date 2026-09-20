@@ -6,7 +6,7 @@
 # ]
 # ///
 """
-didahSDR - Standalone Test Server
+didahSDR - Replay Server
 Features:
 - Streams an IQ WAV file of any size in a loop with a bounded (~16 MB) read-ahead buffer.
 - Standard WebSocket protocol (handshake, config).
@@ -285,7 +285,20 @@ def create_app(wav_path: str, static_dir: Path, center_freq: int, fps: int):
     looper = WavIQLooper(wav_path)
     server = DidahServer(looper, static_dir, center_freq=center_freq, fps=fps)
 
-    app = web.Application()
+    @web.middleware
+    async def isolation_headers(request, handler):
+        # Cross-origin isolation lets onnxruntime-web use SharedArrayBuffer (multi-threaded WASM) in the
+        # CW decoder worker. WebSockets to external Kiwi servers are unaffected by COEP.
+        response = await handler(request)
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
+        # The test server is a live-reload workflow: never let the browser keep a stale
+        # audio.js while serving a newer app.js (Firefox will do that on a normal refresh).
+        if request.path == "/" or request.path.startswith(("/js/", "/css/", "/lib/", "/models/")):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
+    app = web.Application(middlewares=[isolation_headers])
     app["server"] = server
     app.cleanup_ctx.append(start_background_tasks)
 
@@ -301,12 +314,16 @@ def create_app(wav_path: str, static_dir: Path, center_freq: int, fps: int):
     # Static assets
     app.router.add_static("/css", static_dir / "css")
     app.router.add_static("/js", static_dir / "js")
+    # CW decoder assets: vendored onnxruntime-web (scripts/fetch_ort.sh) and the exported model
+    for name in ("lib", "models"):
+        if (static_dir / name).is_dir():
+            app.router.add_static(f"/{name}", static_dir / name)
 
     return app
 
 
 def main():
-    parser = argparse.ArgumentParser(description="didahSDR - Test Server (raw IQ streaming, no server-side DSP)")
+    parser = argparse.ArgumentParser(description="didahSDR - Replay Server (raw IQ streaming, no server-side DSP)")
     parser.add_argument("--wav", type=str, default=None, help="Path to 16-bit stereo IQ WAV file")
     parser.add_argument("--port", type=int, default=9000, help="Port to listen on (default: 9000)")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host IP to bind (default: 0.0.0.0)")

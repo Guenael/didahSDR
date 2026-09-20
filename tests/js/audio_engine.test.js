@@ -59,3 +59,52 @@ test('reset drops everything and returns to prebuffering', () => {
     assert.equal(e.prebuffering, true);
     assert.equal(peakAbs(Object.assign(new Float32Array(128), {})), 0);
 });
+
+test('setInputRate(12000) resamples toward the context rate and resets the ring', () => {
+    const e = new DidahAudioEngine(48000, 48000);
+    e.push(tone(8000));
+    e.setInputRate(12000);
+    assert.equal(e.inputRate, 12000);
+    assert.equal(e.buffered, 0);
+    assert.equal(e.prebuffering, true);
+    const out = new Float32Array(480);        // 10 ms of 48 kHz output
+    e.push(tone(e.minPrebuffer + 2400, 1000, 12000));
+    const before = e.buffered;
+    e.render(out);
+    assert.ok(Math.abs((before - e.buffered) - 120) < 8, `consumed ${before - e.buffered}, expected ~120 input samples`);
+});
+
+test('sidetone bypasses the RX jitter buffer', () => {
+    const renderSidetoneOrRx = DidahAudioEngine.renderSidetoneOrRx;
+    const engine = new DidahAudioEngine(48000, 48000);
+    const rx = new Float32Array(engine.targetBuffer);
+    rx.fill(0.9);
+    engine.push(rx);
+    const keyer = new CwKeyer();
+    keyer.setWpm(20);
+    keyer.setPaddle('dit', true);
+    const out = new Float32Array(128);
+    const txState = { wasTx: false };
+    const peak = renderSidetoneOrRx(txState, engine, keyer, out, 48000, 700, false);
+    assert.equal(txState.wasTx, true);
+    assert.ok(Math.abs(out[0]) < 0.05, 'first sample is the sidetone rise, not queued RX');
+    assert.ok(peak > 0.05, `sidetone peak ${peak}`);
+});
+
+test('leaving TX drops the RX ring so playback re-prebuffers', () => {
+    const renderSidetoneOrRx = DidahAudioEngine.renderSidetoneOrRx;
+    const engine = new DidahAudioEngine(48000, 48000);
+    engine.push(tone(engine.targetBuffer));
+    const keyer = new CwKeyer();
+    keyer.setWpm(20);
+    keyer.setPaddle('dit', true);
+    const out = new Float32Array(128);
+    const txState = { wasTx: false };
+    renderSidetoneOrRx(txState, engine, keyer, out, 48000, 700, false);
+    keyer.setPaddle('dit', false);
+    keyer.abort();
+    const peak = renderSidetoneOrRx(txState, engine, keyer, out, 48000, 700, false);
+    assert.equal(txState.wasTx, false);
+    assert.equal(engine.prebuffering, true);
+    assert.equal(peak, 0);
+});

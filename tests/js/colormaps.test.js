@@ -29,3 +29,14 @@ test('getRgb agrees with the packed ABGR table', () => {
 test('unknown name falls back to viridis', () => {
     assert.equal(Colormaps.getTable('nope'), Colormaps.getTable('viridis'));
 });
+
+test('tty is the rocky RGB permutation [0, 2, 1] as a packed table', () => {
+    const rocky = Colormaps.getTable('rocky');
+    const tty = Colormaps.getTable('tty');
+    assert.equal(tty.length, 256);
+    assert.notEqual(tty, rocky);
+    const [sr, sg, sb] = Colormaps.getRgb('rocky', 255);
+    const [tr, tg, tb] = Colormaps.getRgb('tty', 255);
+    assert.deepEqual([tr, tg, tb], [sr, sb, sg]);
+    assert.equal(tty[255] >>> 24, 0xff);
+});

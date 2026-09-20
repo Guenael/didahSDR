@@ -27,34 +27,35 @@
                         <span class="trx-label">TX</span>
                     </button>
                 </div>
-                
-                <!-- Red Button / Badge: REPLAY MODE (Static Look) -->
-                <div class="replay-badge" title="Playing back recorded RF spectrum in a loop">
-                    <span class="replay-dot"></span>
-                    <span class="replay-text">REPLAY MODE</span>
-                </div>
             </div>
 
             <div class="top-bar-right">
-                <!-- S-Meter Toggle Button -->
+                <button id="wconfig-btn" class="smeter-btn" title="Settings">
+                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.8 1.8 0 0 1 0 2.6 1.8 1.8 0 0 1-2.6 0l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a1.8 1.8 0 0 1-1.8 1.8h-1a1.8 1.8 0 0 1-1.8-1.8v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a1.8 1.8 0 0 1-2.6 0 1.8 1.8 0 0 1 0-2.6l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4A1.8 1.8 0 0 1 2.2 13v-1A1.8 1.8 0 0 1 4 10.2h.2a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a1.8 1.8 0 0 1 0-2.6 1.8 1.8 0 0 1 2.6 0l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V4A1.8 1.8 0 0 1 11 2.2h1A1.8 1.8 0 0 1 13.8 4v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a1.8 1.8 0 0 1 2.6 0 1.8 1.8 0 0 1 0 2.6l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6h.2A1.8 1.8 0 0 1 21.8 11v1a1.8 1.8 0 0 1-1.8 1.8h-.2a1 1 0 0 0-.4 1.2"></path></svg>
+                    <span>Setting</span>
+                </button>
+
+                <button id="source-btn" class="smeter-btn" title="Select IQ source">
+                    <span class="smeter-icon">📡</span>
+                    <span>Source</span>
+                </button>
+
                 <button id="smeter-btn" class="smeter-btn active" title="Toggle SNR S-Meter Window">
                     <span class="smeter-icon">📶</span>
                     <span>S-Meter</span>
                 </button>
 
-                <!-- Waterfall Config Window Toggle Button -->
-                <button id="wconfig-btn" class="smeter-btn" title="Toggle Waterfall Config Window">
-                    <span class="smeter-icon">🎚️</span>
-                    <span>W-Config</span>
+                <button id="decoder-btn" class="smeter-btn" title="Toggle CW Decoder Window">
+                    <span class="smeter-icon">🔤</span>
+                    <span>Decoder</span>
                 </button>
 
-                <!-- Audio Start / Unmute Button for browser autoplay policies -->
                 <button id="audio-btn" class="audio-toggle-btn need-start" title="Audio Status (Click to start/mute)">
                     <span id="audio-icon">🔊</span>
                     <span id="audio-text">Start Audio</span>
                 </button>
 
-                <div class="status-badge">
+                <div class="info-item status-badge">
                     <span id="status-dot" class="status-dot"></span>
                     <span id="status-text">Connecting...</span>
                 </div>
@@ -62,7 +63,6 @@
                 <div id="sample-rate-badge" class="info-item">SR: 96 kHz</div>
                 <div id="fps-badge" class="info-item">0 FPS</div>
 
-                <!-- Help Button -->
                 <button id="help-btn" class="help-btn" title="View Quick Guide & Shortcuts">? Help</button>
             </div>
         </header>
@@ -102,79 +102,193 @@
             </div>
         </div>
 
-        <!-- W-CONFIG FLOATING WINDOW (Waterfall settings) -->
+        <!-- CONFIG FLOATING WINDOW (Waterfall, CW, USB/LSB) -->
         <div id="wconfig-window" class="smeter-window wconfig-window" style="display: none;">
             <div id="wconfig-header" class="smeter-header">
                 <div class="smeter-title">
                     <span class="smeter-drag-icon">⋮⋮</span>
-                    <span>W-CONFIG · WATERFALL</span>
+                    <span>CONFIG</span>
                 </div>
-                <button id="wconfig-close-btn" class="smeter-close-btn" title="Close W-Config">✕</button>
+                <button id="wconfig-close-btn" class="smeter-close-btn" title="Close Config">✕</button>
             </div>
             <div class="smeter-body wconfig-body">
-                <!-- Waterfall Min Level Slider (-160 to 0 dB) -->
-                <div class="control-group slider-container">
-                    <label for="min-lvl-slider">WF Min Level:</label>
-                    <input id="min-lvl-slider" type="range" min="-140" max="-20" step="1" value="-127" autocomplete="off">
-                    <span id="min-lvl-val" class="slider-val">-127 dB</span>
+                <div class="wconfig-section">
+                    <div class="wconfig-section-title">WATERFALL</div>
+                    <div class="control-group slider-container">
+                        <label for="min-lvl-slider">WF Min Level:</label>
+                        <input id="min-lvl-slider" type="range" min="-140" max="-20" step="1" value="-127" autocomplete="off">
+                        <span id="min-lvl-val" class="slider-val">-127 dB</span>
+                    </div>
+                    <div class="control-group slider-container">
+                        <label for="dyn-range-slider">WF Dyn Range:</label>
+                        <input id="dyn-range-slider" type="range" min="20" max="120" step="1" value="60" autocomplete="off">
+                        <span id="dyn-range-val" class="slider-val">60 dB</span>
+                    </div>
+                    <div class="control-group slider-container">
+                        <label for="speed-slider">WF Speed:</label>
+                        <input id="speed-slider" type="range" min="1" max="8" step="1" value="3">
+                        <span id="speed-val" class="slider-val">3x</span>
+                    </div>
+                    <div class="control-group">
+                        <label for="fft-select">Resolution/Separation:</label>
+                        <select id="fft-select" class="select-input" title="Time vs Frequency resolution">
+                            <option value="1024">Separation</option>
+                            <option value="2048" selected>Balanced</option>
+                            <option value="4096">Resolution</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="kernel-select">Click Filter:</label>
+                        <select id="kernel-select" class="select-input" title="Key-Click Suppression & Sharpening Filter">
+                            <option value="off">Off</option>
+                            <option value="light">Light</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="strong">Strong</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <button id="qrss-toggle" class="toggle-btn" title="Slow waterfall: Blackman window and averaged FFT bins. WF Speed sets integration time.">QRSS: OFF</button>
+                    </div>
                 </div>
 
-                <!-- Waterfall Dynamic Range Slider (up to 120 dB) -->
-                <div class="control-group slider-container">
-                    <label for="dyn-range-slider">WF Dyn Range:</label>
-                    <input id="dyn-range-slider" type="range" min="20" max="120" step="1" value="60" autocomplete="off">
-                    <span id="dyn-range-val" class="slider-val">60 dB</span>
+                <div class="wconfig-section" id="cw-config-section">
+                    <div class="wconfig-section-title">CW</div>
+                    <div class="control-group slider-container" id="cw-offset-container">
+                        <label for="cw-offset-slider">CW BFO:</label>
+                        <input id="cw-offset-slider" type="range" min="400" max="1000" step="10" value="700">
+                        <span id="cw-offset-val" class="slider-val">700 Hz</span>
+                    </div>
+                    <div class="control-group slider-container" id="cw-bw-container">
+                        <label for="cw-bw-slider">CW BW:</label>
+                        <input id="cw-bw-slider" type="range" min="50" max="350" step="10" value="150">
+                        <span id="cw-bw-val" class="slider-val">150 Hz</span>
+                    </div>
+                    <div class="control-group" id="iambic-container">
+                        <label>Iambic:</label>
+                        <div class="radio-group" title="Iambic A finishes the current element on squeeze-release. Iambic B also sends the opposite element.">
+                            <label class="radio-label"><input type="radio" name="iambic-mode" value="A"> A</label>
+                            <label class="radio-label"><input type="radio" name="iambic-mode" value="B" checked> B</label>
+                        </div>
+                    </div>
                 </div>
 
-                <!-- Waterfall Scroll Speed Slider (1x to 4x) -->
-                <div class="control-group slider-container">
-                    <label for="speed-slider">WF Speed:</label>
-                    <input id="speed-slider" type="range" min="1" max="4" step="1" value="3">
-                    <span id="speed-val" class="slider-val">3x</span>
+                <div class="wconfig-section is-dimmed" id="ssb-config-section">
+                    <div class="wconfig-section-title">USB / LSB</div>
+                    <div class="control-group slider-container">
+                        <label for="ssb-low-slider">Low:</label>
+                        <input id="ssb-low-slider" type="range" min="50" max="1000" step="10" value="200">
+                        <span id="ssb-low-val" class="slider-val">200 Hz</span>
+                    </div>
+                    <div class="control-group slider-container">
+                        <label for="ssb-high-slider">High:</label>
+                        <input id="ssb-high-slider" type="range" min="800" max="4000" step="10" value="2700">
+                        <span id="ssb-high-val" class="slider-val">2700 Hz</span>
+                    </div>
                 </div>
+            </div>
+        </div>
 
-                <!-- Resolution/Separation (FFT Size) -->
-                <div class="control-group">
-                    <label for="fft-select">Resolution/Separation:</label>
-                    <select id="fft-select" class="select-input" title="Time vs Frequency resolution">
-                        <option value="1024">Separation</option>
-                        <option value="2048" selected>Balanced</option>
-                        <option value="4096">Resolution</option>
-                    </select>
+        <!-- SOURCE FLOATING WINDOW (IQ WebSocket selector) -->
+        <!-- CW DECODER FLOATING WINDOW (neural decoder, see js/cw_decoder.js) -->
+        <div id="decoder-window" class="smeter-window decoder-window" style="display: none;">
+            <div id="decoder-header" class="smeter-header">
+                <div class="smeter-title">
+                    <span class="smeter-drag-icon">⋮⋮</span>
+                    <span>CW DECODER</span>
+                    <span id="decoder-status" class="cwd-status cwd-status-off">OFF</span>
                 </div>
+                <div class="cwd-header-btns">
+                    <button id="decoder-clear-btn" class="cwd-clear-btn" title="Clear transcript">CLR</button>
+                    <button id="decoder-close-btn" class="smeter-close-btn" title="Close Decoder">✕</button>
+                </div>
+            </div>
+            <div class="smeter-body">
+                <div id="decoder-output" class="cwd-output"></div>
+                <div class="cwd-hint">CW mode only · tune the carrier onto the cursor</div>
+            </div>
+        </div>
 
-                <!-- Click Filter -->
-                <div class="control-group">
-                    <label for="kernel-select">Click Filter:</label>
-                    <select id="kernel-select" class="select-input" title="Key-Click Suppression & Sharpening Filter">
-                        <option value="off">Off</option>
-                        <option value="light">Light</option>
-                        <option value="medium" selected>Medium</option>
-                        <option value="strong">Strong</option>
-                    </select>
+        <div id="source-window" class="smeter-window source-window" style="display: none;">
+            <div id="source-header" class="smeter-header">
+                <div class="smeter-title">
+                    <span class="smeter-drag-icon">⋮⋮</span>
+                    <span>SOURCE · IQ STREAM</span>
                 </div>
+                <button id="source-close-btn" class="smeter-close-btn" title="Close Source">✕</button>
+            </div>
+            <div class="smeter-body source-body">
+                <label class="source-option">
+                    <input type="radio" name="iq-source" value="va2gka" checked>
+                    <span class="source-option-text">
+                        <span class="source-option-label">VA2GKA Replay Server</span>
+                        <span class="source-option-meta">96 kHz · 14.048 MHz · local /ws</span>
+                    </span>
+                </label>
+                <div class="source-option source-option-soundcard">
+                    <label class="source-option-head">
+                        <input type="radio" name="iq-source" value="soundcard">
+                        <span class="source-option-text">
+                            <span class="source-option-label">Sound card</span>
+                            <span class="source-option-meta">Local input · centre 0 Hz</span>
+                        </span>
+                    </label>
+                    <div class="source-sound-fields">
+                        <label class="source-subradio">
+                            <input type="radio" name="sound-mode" value="iq" checked>
+                            <span>Stereo 48 / 96 / 192 kHz — IQ (SoftRock)</span>
+                        </label>
+                        <label class="source-subradio is-disabled" title="Mono AF is not wired yet: the waterfall and CW decoder expect complex IQ.">
+                            <input type="radio" name="sound-mode" value="mono" disabled>
+                            <span>Mono 48 / 96 / 192 kHz — standard transceiver 4 kHz BW</span>
+                        </label>
+                        <p class="source-todo">TODO: mono AF (not IQ). Waterfall would be audio Hz around 0; the CW model still wants the tone mixed to DC. Hardware TX (COM/PTT or IQ DAC) is a separate path.</p>
+                        <div class="source-kiwi-row">
+                            <select id="sound-device" class="source-url-input" aria-label="Sound card device">
+                                <option value="">Click Enable to list devices…</option>
+                            </select>
+                            <button type="button" id="sound-enable-btn" class="source-connect-btn" title="Allow microphone access and list devices">Enable</button>
+                        </div>
+                        <label class="source-iq-swap">
+                            <input type="checkbox" id="sound-iq-swap">
+                            Swap I/Q (L/R)
+                        </label>
+                    </div>
+                </div>
+                <div class="source-option source-option-kiwi">
+                    <label class="source-option-head">
+                        <input type="radio" name="iq-source" value="f4kiy">
+                        <span class="source-option-text">
+                            <span class="source-option-label">KiwiSDR Server</span>
+                            <span class="source-option-meta">12 kHz IQ · paste the receiver URL</span>
+                        </span>
+                    </label>
+                    <div class="source-kiwi-fields">
+                        <div class="source-kiwi-row">
+                            <input type="text" id="kiwi-url" class="source-url-input" value="http://oh5ae.dyndns.org:8073"
+                                   spellcheck="false" autocomplete="off" autocapitalize="off" inputmode="url"
+                                   placeholder="http://oh5ae.dyndns.org:8073" aria-label="KiwiSDR URL">
+                            <button type="button" id="kiwi-connect-btn" class="source-connect-btn" title="Connect to this KiwiSDR">Connect</button>
+                        </div>
+                        <p id="kiwi-url-hint" class="source-url-hint">
+                            Example:<br>
+                            - <code>http://f4kiy.ddns.net:8073</code><br>
+                            - <code>http://oh5ae.dyndns.org:8073</code><br>
+                            Map of the KiwiSDR receivers:<br>
+                            <a href="http://rx.linkfanel.net/" target="_blank" rel="noopener noreferrer">http://rx.linkfanel.net/</a>
+                        </p>
+                    </div>
+                </div>
+                <p id="source-status" class="source-status">didah 0x03 IQ · 96 kHz · CF 14.0480 MHz.</p>
             </div>
         </div>
 
         <!-- 3. BOTTOM PANEL: CONTROLS & INFORMATION -->
         <footer id="bottom-panel">
-            <!-- Row 1: Frequency Dial, Modes, Step, and Theme -->
-            <div class="control-row">
-                <!-- Analog Mechanical Drum Frequency Dial (SDRangelove style) -->
-                <div class="control-group">
-                    <span class="group-label">VFO:</span>
-                    <div id="freq-dial-container"></div>
-                </div>
-
-                <!-- Demodulation Mode + Tuning Step -->
-                <div class="control-cluster">
+            <div class="control-row control-row-main">
+                <div class="control-cluster control-left">
                     <div class="control-group">
-                        <span class="group-label">Mode:</span>
-                        <div class="btn-group">
-                            <button class="btn mode-btn active" data-mode="cw">CW</button>
-                            <button class="btn mode-btn" data-mode="usb">USB</button>
-                            <button class="btn mode-btn" data-mode="lsb">LSB</button>
-                        </div>
+                        <span class="group-label">VFO:</span>
+                        <div id="freq-dial-container"></div>
                     </div>
                     <div class="control-group">
                         <span class="group-label">Step:</span>
@@ -186,24 +300,27 @@
                             <option value="5000">5 kHz</option>
                         </select>
                     </div>
-                </div>
-
-                <!-- Colormap Theme Selector -->
-                <div class="control-group">
-                    <span class="group-label">Colormap:</span>
-                    <select id="theme-select" class="select-input"></select>
-                </div>
-            </div>
-
-            <!-- Row 2: Volume, CW BFO / BW, AGC and CW Filter -->
-            <div class="control-row">
-                <!-- Audio: Volume + AGC -->
-                <div class="control-cluster">
-                    <div class="control-group slider-container">
-                        <label for="vol-slider">Volume:</label>
-                        <input id="vol-slider" type="range" min="0" max="1" step="0.01" value="0.8">
-                        <span id="vol-val" class="slider-val">80%</span>
+                    <div class="control-group">
+                        <span class="group-label">Mode:</span>
+                        <div class="btn-group">
+                            <button class="btn mode-btn active" data-mode="cw">CW</button>
+                            <button class="btn mode-btn" data-mode="usb">USB</button>
+                            <button class="btn mode-btn" data-mode="lsb">LSB</button>
+                        </div>
                     </div>
+                </div>
+
+                <div class="control-cluster control-center">
+                    <div class="control-group">
+                        <span class="group-label">Colormap:</span>
+                        <select id="theme-select" class="select-input"></select>
+                    </div>
+                    <div class="control-group">
+                        <button id="cw-filter-toggle" class="toggle-btn active" title="Toggle CW Adaptive IIR Noise Squelch & Sharpening">CW Filter: ON</button>
+                    </div>
+                </div>
+
+                <div class="control-cluster control-right">
                     <div class="control-group">
                         <span class="group-label">AGC:</span>
                         <select id="agc-select" class="select-input" title="AGC Response Speed">
@@ -212,25 +329,24 @@
                             <option value="slow">Slow</option>
                         </select>
                     </div>
-                </div>
-
-                <!-- CW: BFO pitch + Bandwidth -->
-                <div class="control-cluster">
-                    <div class="control-group slider-container" id="cw-offset-container">
-                        <label for="cw-offset-slider">CW BFO:</label>
-                        <input id="cw-offset-slider" type="range" min="400" max="1000" step="10" value="700">
-                        <span id="cw-offset-val" class="slider-val">700 Hz</span>
-                    </div>
-                    <div class="control-group slider-container" id="cw-bw-container">
-                        <label for="cw-bw-slider">CW BW:</label>
-                        <input id="cw-bw-slider" type="range" min="50" max="350" step="10" value="150">
-                        <span id="cw-bw-val" class="slider-val">150 Hz</span>
+                    <div class="control-group slider-container">
+                        <label for="vol-slider">Volume:</label>
+                        <input id="vol-slider" type="range" min="0" max="1" step="0.01" value="0.8">
+                        <span id="vol-val" class="slider-val">80%</span>
                     </div>
                 </div>
+            </div>
 
-                <!-- CW Filter -->
-                <div class="control-group">
-                    <button id="cw-filter-toggle" class="toggle-btn active" title="Toggle CW Adaptive IIR Noise Squelch & Sharpening">CW Filter: ON</button>
+            <div class="control-row control-row-tx" id="tx-row">
+                <button id="tx-arm-btn" class="tx-arm-btn" title="Arm keyboard CW. RX stays on until you type or a buffered line is sent.">
+                    PTT Off
+                </button>
+                <input id="tx-text" class="tx-text-input" type="text" spellcheck="false" autocomplete="off" autocapitalize="off"
+                       placeholder="Type ahead to send CW…" aria-label="CW transmit text">
+                <div class="control-group slider-container tx-wpm-group">
+                    <label for="wpm-slider">WPM:</label>
+                    <input id="wpm-slider" type="range" min="10" max="40" step="1" value="20">
+                    <span id="wpm-val" class="slider-val">20</span>
                 </div>
             </div>
         </footer>
@@ -252,13 +368,71 @@
                 </section>
 
                 <section class="help-section">
+                    <h3>IQ sources</h3>
+                    <p class="help-text">
+                        Open the Source window to switch between VA2GKA Replay (local 96 kHz recording),
+                        a local sound card (stereo IQ at 48 / 96 / 192 kHz, centre 0 Hz),
+                        and a live KiwiSDR (12 kHz IQ). Paste the receiver web address, for example
+                        <code>http://oh5ae.dyndns.org:8073</code>
+                        or <code>http://f4kiy.ddns.net:8073</code>. On live Kiwi the waterfall is a
+                        12 kHz zoom; tuning past the edges or Shift+wheel / ruler-drag slides the Kiwi DDC.
+                        Sound-card IQ uses the same DSP as Replay; tick <strong>Swap I/Q</strong> if the
+                        spectrum is reversed. Enable asks for 96 kHz, then 48, then 192 (browsers do not
+                        agree on the unconstrained default: Chrome on Linux often reports 44.1 kHz,
+                        Firefox may report the PipeWire graph rate). Chrome also hides Pulse
+                        <em>Monitor of …</em> loopbacks; create a virtual mic if you need to inject a WAV
+                        (see below).
+                    </p>
+                    <p class="help-text">
+                        Linux IQ loopback (PipeWire / Pulse): a null sink plus a remap source so Chrome
+                        lists it as a microphone.
+                    </p>
+                    <pre class="help-pre">pactl load-module module-null-sink sink_name=didah_iq \
+  sink_properties=device.description=didahSDR_IQ \
+  format=s16le rate=96000 channels=2
+pactl load-module module-remap-source source_name=didah_iq_mic \
+  master=didah_iq.monitor \
+  source_properties=device.description=didahSDR_IQ
+ffmpeg -re -stream_loop -1 -i samples/SAMPLE2.wav \
+  -f pulse -device didah_iq didahSDR</pre>
+                    <p class="help-text">
+                        Chrome on Linux is the awkward case: capture is usually locked to
+                        <strong>48 kHz</strong> (96 kHz is a Firefox/PipeWire thing), and it may ignore
+                        the selected device. After Enable, open <code>pavucontrol</code> →
+                        <strong>Recording</strong> and set the Chromium / Chrome stream to
+                        <code>didahSDR_IQ</code>. Or start the browser with that source:
+                    </p>
+                    <pre class="help-pre">PULSE_SOURCE=didah_iq_mic chromium</pre>
+                    <p class="help-text">
+                        The ffmpeg filename after <code>-f pulse</code> is only a stream label;
+                        <code>-device didah_iq</code> is what actually feeds the virtual sink.
+                        Then Enable and pick <code>didahSDR_IQ</code> (not a “Monitor of …” entry).
+                        IQ is not speaker audio: you should see spectrum around 0 Hz and hear CW after
+                        demodulation (Start Audio). Unload with
+                        <code>pactl unload-module module-remap-source</code> and
+                        <code>pactl unload-module module-null-sink</code> (or restart PipeWire).
+                    </p>
+                </section>
+
+                <section class="help-section">
+                    <h3>Settings</h3>
+                    <p class="help-text">
+                        Open the gear button for waterfall levels, WF Speed (1x–8x STFT overlap), CW BFO/BW,
+                        iambic A/B, and USB/LSB low/high (default 200–2700 Hz). QRSS (in the WATERFALL
+                        section) switches the FFT to a Blackman window and averages successive spectra
+                        so slow Morse stands out; WF Speed then sets how long each column integrates.
+                    </p>
+                </section>
+
+                <section class="help-section">
                     <h3>Mouse behaviours</h3>
                     <ul>
                         <li><strong>Mouse Wheel:</strong> Move the VFO up and down according to the frequency step selected.</li>
-                        <li><strong>CTRL + Mouse Wheel:</strong> Zoom the waterfall, centred on the cursor.</li>
-                        <li><strong>SHIFT + Mouse Wheel:</strong> Move the waterfall up and down.</li>
+                        <li><strong>CTRL + Mouse Wheel / CTRL + Left Drag:</strong> Zoom the waterfall, centred on the cursor.</li>
+                        <li><strong>SHIFT + Mouse Wheel / SHIFT + Left Drag:</strong> Pan the waterfall up and down (on live Kiwi this slides the 12 kHz DDC).</li>
+                        <li><strong>CTRL + SHIFT + Wheel / Drag:</strong> Step CW bandwidth, or USB/LSB High when in SSB.</li>
                         <li><strong>Left Click on Waterfall:</strong> Move the VFO to the selected frequency (hold and drag to track).</li>
-                        <li><strong>Left Click on the Ruler:</strong> Drag to move the waterfall up and down.</li>
+                        <li><strong>Left Click on the Ruler:</strong> Drag to pan the waterfall up and down.</li>
                     </ul>
                 </section>
 
@@ -272,7 +446,27 @@
                         <div><kbd>Home</kbd> / <kbd>End</kbd></div><div>Zoom Min / Zoom Max</div>
                         <div><kbd>+</kbd> / <kbd>-</kbd></div><div>Change the step (10 Hz &rarr; 5 kHz)</div>
                         <div><kbd>Esc</kbd></div><div>Close this Help dialog</div>
+                        <div><kbd>F8</kbd></div><div>CW dit paddle (local sidetone)</div>
+                        <div><kbd>F9</kbd></div><div>CW dah paddle (iambic squeeze with F8)</div>
+                        <div><kbd>F4</kbd></div><div>CW straight key (tone while held)</div>
                     </div>
+                </section>
+
+                <section class="help-section">
+                    <h3>Local CW transmit</h3>
+                    <p class="help-text">
+                        CW mode only, local sidetone — nothing is sent to the server yet.
+                        The waterfall freezes while you key (the history from before TX stays on screen)
+                        and RX audio is muted. Sidetone is generated on the audio clock so F8/F9/F4
+                        track the paddles without the receive jitter buffer.
+                        <strong>PTT Off</strong> / <strong>PTT On</strong> arms the typeahead line (bright red).
+                        Typing, or clicking PTT On with text already in the box, keys a sidetone at the
+                        CW BFO. The buffer grows if you type faster than Morse; when it empties, RX
+                        returns after one extra letter-space (no RX between letters). Click PTT On
+                        again to disarm (PTT Off); remaining text stays in the box.
+                        F8/F9 are an iambic paddle (mode A/B in Settings, B default); F4 is a straight key.
+                        Paddles work even when PTT is not armed.
+                    </p>
                 </section>
 
                 <section class="help-section">
@@ -282,6 +476,14 @@
                         <li><strong>Left Click on a digit:</strong> Selects the digit cursor. Use <code>Arrow Up/Down</code> to spin the drum or type digits <code>0-9</code>.</li>
                         <li><strong>Right Click on a digit:</strong> Zeroes out all digits to the right (convenient rounding tool).</li>
                     </ul>
+                </section>
+
+                <section class="help-section">
+                    <h3>Licence</h3>
+                    <p class="help-text">
+                        didahSDR is free software under the GNU Affero General Public License v3 or later.
+                        The full text is in the project <code>LICENSE</code> file.
+                    </p>
                 </section>
             </div>
         </div>
@@ -297,9 +499,14 @@
     <script src="js/floating_window.js"></script>
     <script src="js/value_dial.js"></script>
     <script src="js/waterfall.js"></script>
-    <script src="js/audio.js"></script>
+    <script src="js/audio.js?v=2"></script>
     <script src="js/smeter.js"></script>
+    <script src="js/cw_decoder.js"></script>
     <script src="js/connection.js"></script>
-    <script src="js/app.js"></script>
+    <script src="js/sources.js"></script>
+    <script src="js/kiwi.js"></script>
+    <script src="js/soundcard.js"></script>
+    <script src="js/cw_keyer.js?v=2"></script>
+    <script src="js/app.js?v=2"></script>
 </body>
 </html>

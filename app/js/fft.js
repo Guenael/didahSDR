@@ -15,6 +15,7 @@ class DidahFFT {
         this.tempReal = new Float32Array(size);
         this.tempImag = new Float32Array(size);
         this.powerBuffer = new Float32Array(size);
+        this.mag2Buffer = new Float32Array(size);
 
         this.initTables(size);
         this.initWindow(this.windowName);
@@ -47,6 +48,7 @@ class DidahFFT {
             this.tempReal = new Float32Array(size);
             this.tempImag = new Float32Array(size);
             this.powerBuffer = new Float32Array(size);
+            this.mag2Buffer = new Float32Array(size);
         }
     }
 
@@ -154,12 +156,14 @@ class DidahFFT {
         const half = n / 2;
         const invN2 = 1.0 / (this.windowSum * this.windowSum);
         const out = this.powerBuffer;
+        const mag2Out = this.mag2Buffer;
 
         for (let i = 0; i < n; i++) {
             // fftshift: out[0..half-1] comes from r[half..n-1]
             //           out[half..n-1] comes from r[0..half-1]
             const srcIdx = (i + half) % n;
             const mag2 = (r[srcIdx] * r[srcIdx] + im[srcIdx] * im[srcIdx]) * invN2;
+            mag2Out[i] = mag2;
             out[i] = 10.0 * Math.log10(Math.max(mag2, 1e-15));
         }
 

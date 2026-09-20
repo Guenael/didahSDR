@@ -27,6 +27,22 @@
     gap: 1px;
 }
 
+.dial-sign {
+    display: none;
+    width: 16px;
+    height: 38px;
+    line-height: 38px;
+    text-align: center;
+    font-size: 22px;
+    font-weight: 700;
+    color: #abb2bf;
+    user-select: none;
+}
+
+.dial-sign.is-negative {
+    color: #e5c07b;
+}
+
 /* Individual drum wheel */
 .dial-drum {
     position: relative;

@@ -37,6 +37,10 @@ tmp/*
 # Exclude the samples directory containing large WAV files
 samples/*.wav
 
+# Exclude models from GitHub (because of the size of the models)
+app/lib/
+app/models/*
+
 # Exclude LLM stuff
 CLAUDE.md
 .cursorrules

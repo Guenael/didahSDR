@@ -18,10 +18,13 @@ class WebAudioPlayer {
         this.volume = 0.8;
         this.muted = false;
         this.INPUT_RATE = 48000;     // demodulator output rate; the context is asked for the same rate
+        this.WORKLET_V = '2';        // cache-bust Firefox's AudioWorklet module map
 
         this.onStateChange = null;
         this.onLevel = null;
+        this.onKeyerState = null;    // ({ tx, keyed, wantChar, consumed, gen }) from the worklet
         this.unsupported = false;
+        this._keyerQueue = [];
 
         // Diagnostics (enable with ?audiodebug in the URL). One console line per second.
         this.debug = typeof location !== 'undefined' && /[?&]audiodebug/.test(location.search);
@@ -39,9 +42,13 @@ class WebAudioPlayer {
             return this.initPromise;
         }
         try {
-            this.ctx = new AudioCtx({ sampleRate: this.INPUT_RATE });   // native 48 kHz if the hardware allows
+            this.ctx = new AudioCtx({ sampleRate: this.INPUT_RATE, latencyHint: 'interactive' });
         } catch (e) {
-            this.ctx = new AudioCtx();
+            try {
+                this.ctx = new AudioCtx({ latencyHint: 'interactive' });
+            } catch (e2) {
+                this.ctx = new AudioCtx();
+            }
         }
         if (!this.ctx.audioWorklet) {
             this.unsupported = true;
@@ -56,24 +63,31 @@ class WebAudioPlayer {
 
         this.ctx.onstatechange = () => this.emitState();
 
-        this.initPromise = this.ctx.audioWorklet.addModule('js/audio_worklet.js').then(() => {
-            this.node = new AudioWorkletNode(this.ctx, 'didah-audio', { numberOfInputs: 0, outputChannelCount: [1] });
-            this.node.port.onmessage = (e) => this.handleWorkletMessage(e.data);
-            this.node.connect(this.gainNode);
-            if (this.debug) this.node.port.postMessage({ type: 'debug', on: true });
-            this.ready = true;
-            this.emitState();
-        }).catch((err) => {
-            this.unsupported = true;
-            console.error('didahSDR: failed to load the audio worklet:', err);
-            this.emitState();
-        });
+        this.initPromise = this.ctx.audioWorklet.addModule(`js/cw_keyer.js?v=${this.WORKLET_V}`)
+            .then(() => this.ctx.audioWorklet.addModule(`js/audio_worklet.js?v=${this.WORKLET_V}`))
+            .then(() => {
+                this.node = new AudioWorkletNode(this.ctx, 'didah-audio', { numberOfInputs: 0, outputChannelCount: [1] });
+                this.node.port.onmessage = (e) => this.handleWorkletMessage(e.data);
+                this.node.connect(this.gainNode);
+                if (this.debug) this.node.port.postMessage({ type: 'debug', on: true });
+                this.ready = true;
+                const queued = this._keyerQueue;
+                this._keyerQueue = [];
+                for (let i = 0; i < queued.length; i++) this.node.port.postMessage(queued[i]);
+                this.emitState();
+            }).catch((err) => {
+                this.unsupported = true;
+                console.error('didahSDR: failed to load the audio worklet:', err);
+                this.emitState();
+            });
         this.emitState();
         return this.initPromise;
     }
 
     handleWorkletMessage(m) {
-        if (m.type === 'level') {
+        if (m.type === 'keyer') {
+            if (this.onKeyerState) this.onKeyerState(m);
+        } else if (m.type === 'level') {
             if (this.onLevel) this.onLevel(m.peak);
         } else if (m.type === 'stats') {
             const extra = this.extraStats ? this.extraStats() : {};
@@ -126,7 +140,7 @@ class WebAudioPlayer {
     }
 
     /**
-     * Push 48 kHz Float32 mono audio into the worklet's jitter buffer.
+     * Push Float32 mono audio (demodulator output rate) into the worklet's jitter buffer.
      * The array is copied (the demodulator reuses its output buffer) and the copy is transferred.
      * @param {Float32Array} floatArray - Mono audio samples [-1.0, 1.0]
      */
@@ -138,6 +152,33 @@ class WebAudioPlayer {
         this.node.port.postMessage(copy, [copy.buffer]);
     }
 
+    /** Tell the worklet the demodulator output rate (48 kHz replay, ~12 kHz Kiwi). */
+    setInputRate(rate) {
+        this.INPUT_RATE = Math.max(1000, rate);
+        if (this.node) this.node.port.postMessage({ type: 'inputRate', rate: this.INPUT_RATE });
+    }
+
+    resetBuffer() {
+        if (this.node) this.node.port.postMessage({ type: 'reset' });
+    }
+
+    /** Control messages for the worklet-side keyer (sidetone, paddles, typeahead). */
+    postKeyer(msg) {
+        if (this.node) this.node.port.postMessage(msg);
+        else this._keyerQueue.push(msg);
+    }
+
+    setKeyerPaddle(which, down) { this.postKeyer({ type: 'paddle', which, down: !!down }); }
+    setKeyerStraight(down) { this.postKeyer({ type: 'straight', down: !!down }); }
+    setKeyerWpm(wpm) { this.postKeyer({ type: 'wpm', wpm }); }
+    setKeyerIambic(mode) { this.postKeyer({ type: 'iambic', mode }); }
+    setSidetoneHz(hz) { this.postKeyer({ type: 'sidetone', hz }); }
+    setKeyerArmed(on) { this.postKeyer({ type: 'arm', on: !!on }); }
+    setKeyerHasText(on) { this.postKeyer({ type: 'hasText', on: !!on }); }
+    setKeyerText(text, gen) { this.postKeyer({ type: 'setText', text: String(text || ''), gen: gen | 0 }); }
+    sendKeyerChar(ch) { this.postKeyer({ type: 'char', ch: String(ch) }); }
+    abortKeyer() { this.postKeyer({ type: 'abort' }); }
+
     stop() {
         if (this.ctx) this.ctx.suspend();
         if (this.node) this.node.port.postMessage({ type: 'reset' });
@@ -145,4 +186,5 @@ class WebAudioPlayer {
     }
 }
 
+if (typeof globalThis !== 'undefined') globalThis.WebAudioPlayer = WebAudioPlayer;
 if (typeof module !== 'undefined') module.exports = WebAudioPlayer;

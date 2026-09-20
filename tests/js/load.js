@@ -10,15 +10,25 @@ const fs = require('fs');
 const JS = path.resolve(__dirname, '../../app/js');
 const req = (name) => require(path.join(JS, name));
 
-const { MODES, WATERFALL_DB_FLOOR } = req('modes.js');
+const { MODES, WATERFALL_DB_FLOOR, setSsbPassband } = req('modes.js');
 global.MODES = MODES;
 global.WATERFALL_DB_FLOOR = WATERFALL_DB_FLOOR;
+global.setSsbPassband = setSsbPassband;
 global.Colormaps = req('colormaps.js');
 global.CWAdaptiveFilter = req('cw_filter.js');
 global.DidahFFT = req('fft.js');
 global.AGC = req('agc.js');
 const demod = req('demodulator.js');
 global.DidahDemodulator = demod.DidahDemodulator;
+global.designLowpass = demod.designLowpass;
+const cwfe = req('cw_frontend.js');
+global.CWFrontend = cwfe.CWFrontend;
+global.ctcGreedy = cwfe.ctcGreedy;
+const cwKeyer = req('cw_keyer.js');
+global.CwKeyer = cwKeyer.CwKeyer;
+global.MORSE_TABLE = cwKeyer.MORSE_TABLE;
+global.morseOf = cwKeyer.morseOf;
+global.sanitizeTxText = cwKeyer.sanitizeTxText;
 
 const SAMPLE_WAV = path.resolve(__dirname, '../../samples/SAMPLE_20120219_174346Z_14048kHz_RF.wav');
 

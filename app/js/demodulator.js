@@ -3,13 +3,14 @@
  *
  * Signal path, per complex IQ sample at 96 kHz:
  *   1. NCO      : shifts the centre of the wanted passband to DC
- *                 (CW: the carrier itself; SSB: tuned + passband centre from MODES, ±1650 Hz).
+ *                 (CW: the carrier itself; SSB: tuned + passband centre from MODES).
  *   2. Halfband : 31-tap FIR anti-alias lowpass, decimate 2:1 -> 48 kHz complex.
  *   3. Channel  : real-coefficient Kaiser windowed-sinc lowpass applied to I and Q,
  *                 cutoff = passband / 2. Everything outside the wanted passband, including the
  *                 opposite sideband, is gone after this stage. This is the sideband selection.
- *   4. BFO      : rotate by +pitch (CW), +1650 Hz (USB) or -1650 Hz (LSB) and take the real part.
+ *   4. BFO      : rotate by +pitch (CW) or the SSB passband centre (USB +, LSB −) and take Re().
  *   5. AGC (in place).
+ *   A tap on the stage-3 output (complex, pre-BFO, pre-AGC) feeds the CW decoder (cw_decoder.js).
  *
  * Image rejection is set by the channel filter stopband (~60 dB), not by IQ balance tricks.
  * No allocations per packet.
@@ -107,19 +108,64 @@ class DidahDemodulator {
         this.bfoStep = 0.0;
 
         this.halfband = new ComplexFIR(designLowpass(31, sampleRate / 4, sampleRate, 60));
+        // Second halfband: 192 kHz → 96 kHz → 48 kHz (unused unless decim === 4)
+        this.halfband2 = new ComplexFIR(designLowpass(31, sampleRate / 8, sampleRate / 2, 60));
         this.channel = new ComplexFIR(designLowpass(this.CHANNEL_TAPS, 75.0, audioRate, 60));
         this.channelCutoff = 0.0;
 
         // AGC (processes in place)
+        this.agcSpeed = 'medium';
         this.agc = new AGC(this.audioRate);
+
+        // 96 kHz IQ: one halfband 2:1 → 48 kHz. 192 kHz: two halfbands 4:1 → 48 kHz.
+        // Kiwi (~12 kHz) and 48 kHz sound-card IQ skip the decimator.
+        this.decim = this.iqRate >= 144000 ? 4 : this.iqRate >= 72000 ? 2 : 1;
+        this.decimate2 = this.decim >= 2;
+        this.hb1Fill = 0;
+        this.hb2Fill = 0;
 
         // Output buffer, reused across calls (re-allocated only if the packet size changes)
         this.audioOut = new Float32Array(0);
 
+        // Optional tap on the channel-filtered complex baseband (before BFO / Re() / AGC), used by the
+        // CW decoder. Called once per packet as tapCallback(i, q, n) with pre-allocated buffers.
+        this.tapCallback = null;
+        this.tapI = new Float32Array(0);
+        this.tapQ = new Float32Array(0);
+
+        this.updateFilters();
+    }
+
+    /**
+     * Rebuild the NCO/halfband/channel chain for a new IQ sample rate.
+     * 192 kHz → 4:1 to 48 kHz audio; 96 kHz → 2:1 to 48 kHz; slower IQ (48 kHz sound card,
+     * Kiwi ~12 kHz) is demodulated at the IQ rate and resampled in the audio worklet if needed.
+     */
+    setIqRate(iqRate) {
+        const rate = Math.max(1000, iqRate);
+        const decim = rate >= 144000 ? 4 : rate >= 72000 ? 2 : 1;
+        if (rate === this.iqRate && decim === this.decim) return;
+        this.iqRate = rate;
+        this.decim = decim;
+        this.decimate2 = decim >= 2;
+        this.hb1Fill = 0;
+        this.hb2Fill = 0;
+        const audioRate = rate / decim;
+        this.halfband.setTaps(designLowpass(31, this.iqRate / 4, this.iqRate, 60));
+        if (decim === 4) {
+            this.halfband2.setTaps(designLowpass(31, this.iqRate / 8, this.iqRate / 2, 60));
+        }
+        if (audioRate !== this.audioRate) {
+            this.audioRate = audioRate;
+            this.agc = new AGC(this.audioRate);
+            this.agc.setSpeed(this.agcSpeed);
+        }
+        this.channelCutoff = -1;
         this.updateFilters();
     }
 
     setAgcSpeed(speed) {
+        this.agcSpeed = speed;
         this.agc.setSpeed(speed);
     }
 
@@ -182,17 +228,24 @@ class DidahDemodulator {
     }
 
     /**
-     * Demodulates interleaved 16-bit complex IQ into 48 kHz float audio
+     * Demodulates interleaved 16-bit complex IQ into float audio at `this.audioRate`.
      * @param {Int16Array} int16IQ - Interleaved [I0, Q0, I1, Q1, ...]
-     * @returns {Float32Array} Mono audio at 48 kHz. Internal buffer: valid until the next call.
+     * @returns {Float32Array} Mono audio. Internal buffer: valid until the next call.
      */
     process(int16IQ) {
         const numComplex = int16IQ.length / 2;
-        const outLen = numComplex >> 1;
-        if (this.audioOut.length !== outLen) this.audioOut = new Float32Array(outLen);
+        const decim = this.decim;
+        const maxOut = Math.ceil(numComplex / decim) + 1;
+        if (this.audioOut.length < maxOut) {
+            this.audioOut = new Float32Array(maxOut);
+            this.tapI = new Float32Array(maxOut);
+            this.tapQ = new Float32Array(maxOut);
+        }
         const out = this.audioOut;
+        const tapI = this.tapI, tapQ = this.tapQ;
 
         const halfband = this.halfband;
+        const halfband2 = this.halfband2;
         const channel = this.channel;
         const ncoStep = this.ncoStep;
         const bfoStep = this.bfoStep;
@@ -200,37 +253,66 @@ class DidahDemodulator {
         const inv32768 = 1.0 / 32768.0;
         let ncoPhase = this.ncoPhase;
         let bfoPhase = this.bfoPhase;
+        let hb1Fill = this.hb1Fill;
+        let hb2Fill = this.hb2Fill;
+        let o = 0;
 
-        for (let n = 0, o = 0; n < numComplex; n += 2, o++) {
-            // Two input samples: NCO shift each, push both into the halfband, compute once (2:1)
-            for (let k = 0; k < 2; k++) {
-                const idx = (n + k) * 2;
-                const i = int16IQ[idx] * inv32768;
-                const q = int16IQ[idx + 1] * inv32768;
-                const c = Math.cos(ncoPhase);
-                const s = Math.sin(ncoPhase);
-                halfband.push(i * c - q * s, i * s + q * c);
-                ncoPhase += ncoStep;
-                if (ncoPhase > TWO_PI) ncoPhase -= TWO_PI;
-                else if (ncoPhase < -TWO_PI) ncoPhase += TWO_PI;
-            }
-            halfband.compute();
-
-            // Channel lowpass on the complex baseband: sideband selection happens here
-            channel.push(halfband.outI, halfband.outQ);
+        const emit = () => {
             channel.compute();
-
-            // BFO: rotate to the audio pitch, keep the real part
+            tapI[o] = channel.outI;
+            tapQ[o] = channel.outQ;
             out[o] = channel.outI * Math.cos(bfoPhase) - channel.outQ * Math.sin(bfoPhase);
             bfoPhase += bfoStep;
             if (bfoPhase > TWO_PI) bfoPhase -= TWO_PI;
             else if (bfoPhase < -TWO_PI) bfoPhase += TWO_PI;
+            o++;
+        };
+
+        for (let n = 0; n < numComplex; n++) {
+            const idx = n * 2;
+            const i = int16IQ[idx] * inv32768;
+            const q = int16IQ[idx + 1] * inv32768;
+            const c = Math.cos(ncoPhase);
+            const s = Math.sin(ncoPhase);
+            const si = i * c - q * s;
+            const sq = i * s + q * c;
+            ncoPhase += ncoStep;
+            if (ncoPhase > TWO_PI) ncoPhase -= TWO_PI;
+            else if (ncoPhase < -TWO_PI) ncoPhase += TWO_PI;
+
+            if (decim === 1) {
+                channel.push(si, sq);
+                emit();
+                continue;
+            }
+
+            halfband.push(si, sq);
+            hb1Fill++;
+            if (hb1Fill < 2) continue;
+            hb1Fill = 0;
+            halfband.compute();
+            if (decim === 2) {
+                channel.push(halfband.outI, halfband.outQ);
+                emit();
+                continue;
+            }
+
+            halfband2.push(halfband.outI, halfband.outQ);
+            hb2Fill++;
+            if (hb2Fill < 2) continue;
+            hb2Fill = 0;
+            halfband2.compute();
+            channel.push(halfband2.outI, halfband2.outQ);
+            emit();
         }
 
         this.ncoPhase = ncoPhase;
         this.bfoPhase = bfoPhase;
+        this.hb1Fill = hb1Fill;
+        this.hb2Fill = hb2Fill;
 
-        return this.agc.process(out);
+        if (this.tapCallback) this.tapCallback(tapI, tapQ, o);
+        return this.agc.process(out.subarray(0, o));
     }
 }
 

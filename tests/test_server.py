@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from server.test_server import WavIQLooper, create_app, find_wav_file
+from server.replay_server import WavIQLooper, create_app, find_wav_file
 
 
 def test_wav_iq_looper():

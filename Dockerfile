@@ -45,4 +45,4 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE 9000
 
-ENTRYPOINT ["python3", "server/test_server.py", "--host", "0.0.0.0", "--port", "9000"]
+ENTRYPOINT ["python3", "server/replay_server.py", "--host", "0.0.0.0", "--port", "9000"]
