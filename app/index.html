@@ -226,15 +226,45 @@
                 <label class="source-option">
                     <input type="radio" name="iq-source" value="va2gka" checked>
                     <span class="source-option-text">
-                        <span class="source-option-label">VA2GKA Replay</span>
+                        <span class="source-option-label">VA2GKA Replay Server</span>
                         <span class="source-option-meta">96 kHz · 14.048 MHz · local /ws</span>
                     </span>
                 </label>
+                <div class="source-option source-option-soundcard">
+                    <label class="source-option-head">
+                        <input type="radio" name="iq-source" value="soundcard">
+                        <span class="source-option-text">
+                            <span class="source-option-label">Sound card</span>
+                            <span class="source-option-meta">Local input · centre 0 Hz</span>
+                        </span>
+                    </label>
+                    <div class="source-sound-fields">
+                        <label class="source-subradio">
+                            <input type="radio" name="sound-mode" value="iq" checked>
+                            <span>Stereo 48 / 96 / 192 kHz — IQ (SoftRock)</span>
+                        </label>
+                        <label class="source-subradio is-disabled" title="Mono AF is not wired yet: the waterfall and CW decoder expect complex IQ.">
+                            <input type="radio" name="sound-mode" value="mono" disabled>
+                            <span>Mono 48 / 96 / 192 kHz — standard transceiver 4 kHz BW</span>
+                        </label>
+                        <p class="source-todo">TODO: mono AF (not IQ). Waterfall would be audio Hz around 0; the CW model still wants the tone mixed to DC. Hardware TX (COM/PTT or IQ DAC) is a separate path.</p>
+                        <div class="source-kiwi-row">
+                            <select id="sound-device" class="source-url-input" aria-label="Sound card device">
+                                <option value="">Click Enable to list devices…</option>
+                            </select>
+                            <button type="button" id="sound-enable-btn" class="source-connect-btn" title="Allow microphone access and list devices">Enable</button>
+                        </div>
+                        <label class="source-iq-swap">
+                            <input type="checkbox" id="sound-iq-swap">
+                            Swap I/Q (L/R)
+                        </label>
+                    </div>
+                </div>
                 <div class="source-option source-option-kiwi">
                     <label class="source-option-head">
                         <input type="radio" name="iq-source" value="f4kiy">
                         <span class="source-option-text">
-                            <span class="source-option-label">KiwiSDR Live</span>
+                            <span class="source-option-label">KiwiSDR Server</span>
                             <span class="source-option-meta">12 kHz IQ · paste the receiver URL</span>
                         </span>
                     </label>
@@ -343,10 +373,46 @@
                 <section class="help-section">
                     <h3>IQ sources</h3>
                     <p class="help-text">
-                        Open the Source window to switch between VA2GKA Replay (local 96 kHz recording)
+                        Open the Source window to switch between VA2GKA Replay (local 96 kHz recording),
+                        a local sound card (stereo IQ at 48 / 96 / 192 kHz, centre 0 Hz),
                         and a live KiwiSDR (12 kHz IQ). Paste the receiver web address, for example
                         <code>http://f4kiy.ddns.net:8073</code>. On live Kiwi the waterfall is a
                         12 kHz zoom; tuning past the edges or Shift+wheel / ruler-drag slides the Kiwi DDC.
+                        Sound-card IQ uses the same DSP as Replay; tick <strong>Swap I/Q</strong> if the
+                        spectrum is reversed. Enable asks for 96 kHz, then 48, then 192 (browsers do not
+                        agree on the unconstrained default: Chrome on Linux often reports 44.1 kHz,
+                        Firefox may report the PipeWire graph rate). Chrome also hides Pulse
+                        <em>Monitor of …</em> loopbacks; create a virtual mic if you need to inject a WAV
+                        (see below).
+                    </p>
+                    <p class="help-text">
+                        Linux IQ loopback (PipeWire / Pulse): a null sink plus a remap source so Chrome
+                        lists it as a microphone.
+                    </p>
+                    <pre class="help-pre">pactl load-module module-null-sink sink_name=didah_iq \
+  sink_properties=device.description=didahSDR_IQ \
+  format=s16le rate=96000 channels=2
+pactl load-module module-remap-source source_name=didah_iq_mic \
+  master=didah_iq.monitor \
+  source_properties=device.description=didahSDR_IQ
+ffmpeg -re -stream_loop -1 -i samples/SAMPLE2.wav \
+  -f pulse -device didah_iq didahSDR</pre>
+                    <p class="help-text">
+                        Chrome on Linux is the awkward case: capture is usually locked to
+                        <strong>48 kHz</strong> (96 kHz is a Firefox/PipeWire thing), and it may ignore
+                        the selected device. After Enable, open <code>pavucontrol</code> →
+                        <strong>Recording</strong> and set the Chromium / Chrome stream to
+                        <code>didahSDR_IQ</code>. Or start the browser with that source:
+                    </p>
+                    <pre class="help-pre">PULSE_SOURCE=didah_iq_mic chromium</pre>
+                    <p class="help-text">
+                        The ffmpeg filename after <code>-f pulse</code> is only a stream label;
+                        <code>-device didah_iq</code> is what actually feeds the virtual sink.
+                        Then Enable and pick <code>didahSDR_IQ</code> (not a “Monitor of …” entry).
+                        IQ is not speaker audio: you should see spectrum around 0 Hz and hear CW after
+                        demodulation (Start Audio). Unload with
+                        <code>pactl unload-module module-remap-source</code> and
+                        <code>pactl unload-module module-null-sink</code> (or restart PipeWire).
                     </p>
                 </section>
 
@@ -438,6 +504,7 @@
     <script src="js/connection.js"></script>
     <script src="js/sources.js"></script>
     <script src="js/kiwi.js"></script>
+    <script src="js/soundcard.js"></script>
     <script src="js/cw_keyer.js"></script>
     <script src="js/app.js"></script>
 </body>

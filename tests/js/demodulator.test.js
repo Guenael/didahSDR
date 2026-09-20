@@ -49,7 +49,8 @@ test('output buffer is reused between calls and is half the complex input length
     const iq = iqTone(1000, RATE, 2400, 0.1);
     const a = d.process(iq), b = d.process(iq);
     assert.equal(a.length, 1200);
-    assert.equal(a, b);
+    assert.equal(b.length, 1200);
+    assert.equal(a.buffer, b.buffer);
 });
 
 test('setIqRate(12000) skips the halfband and still puts a CW tone at the BFO pitch', () => {
@@ -65,7 +66,32 @@ test('setIqRate(12000) skips the halfband and still puts a CW tone at the BFO pi
 
     d.setIqRate(96000);
     assert.equal(d.decimate2, true);
+    assert.equal(d.decim, 2);
     assert.equal(d.audioRate, 48000);
     const iq = iqTone(1000, RATE, 2400, 0.1);
     assert.equal(d.process(iq).length, 1200);
+});
+
+test('setIqRate(48000) skips the halfband; output length matches IQ length', () => {
+    const d = new DidahDemodulator(RATE, AUDIO);
+    d.setIqRate(48000);
+    assert.equal(d.decim, 1);
+    assert.equal(d.audioRate, 48000);
+    d.setModulation('cw'); d.setOffsetFrequency(0); d.setBfoPitch(700);
+    const audio = run(d, iqTone(0, 48000, 48000, 0.1), 2400);
+    assert.equal(audio.length, 48000);
+    const { freq } = audioPeak(audio, 48000);
+    assert.ok(Math.abs(freq - 700) < 12, `48 kHz audio peak ${freq} Hz, expected 700 Hz`);
+});
+
+test('setIqRate(192000) decimates 4:1 to 48 kHz and keeps the BFO pitch', () => {
+    const d = new DidahDemodulator(RATE, AUDIO);
+    d.setIqRate(192000);
+    assert.equal(d.decim, 4);
+    assert.equal(d.audioRate, 48000);
+    d.setModulation('cw'); d.setOffsetFrequency(0); d.setBfoPitch(700);
+    const audio = run(d, iqTone(0, 192000, 192000 * 0.25, 0.1), 4800);
+    assert.equal(audio.length, Math.floor(192000 * 0.25 / 4));
+    const { freq } = audioPeak(audio, 48000);
+    assert.ok(Math.abs(freq - 700) < 12, `192 kHz audio peak ${freq} Hz, expected 700 Hz`);
 });

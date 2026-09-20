@@ -1,7 +1,8 @@
 /**
  * didahSDR - IQ source catalog
  *
- * Replay uses the local didah WebSocket (0x03 int16 IQ). Kiwi uses a direct SND
+ * Replay uses the local didah WebSocket (0x03 int16 IQ). Sound card uses the
+ * browser microphone API (stereo I/Q at 48/96/192 kHz). Kiwi uses a direct SND
  * connection in mod=iq. Presets are applied when the operator picks a source.
  */
 const SOURCES = [
@@ -15,6 +16,17 @@ const SOURCES = [
         startFreq: 14048700,
         startMod: 'cw',
         note: 'Local 96 kHz IQ recording, looped.'
+    },
+    {
+        id: 'soundcard',
+        label: 'Sound card',
+        protocol: 'soundcard',
+        minLevel: -90,
+        dynamicRange: 50,
+        fftSize: 2048,
+        startFreq: 0,
+        startMod: 'cw',
+        note: 'Local stereo IQ at 48 / 96 / 192 kHz. Center is 0 Hz (offset).'
     },
     {
         id: 'f4kiy',

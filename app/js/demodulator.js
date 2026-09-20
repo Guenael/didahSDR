@@ -108,6 +108,8 @@ class DidahDemodulator {
         this.bfoStep = 0.0;
 
         this.halfband = new ComplexFIR(designLowpass(31, sampleRate / 4, sampleRate, 60));
+        // Second halfband: 192 kHz → 96 kHz → 48 kHz (unused unless decim === 4)
+        this.halfband2 = new ComplexFIR(designLowpass(31, sampleRate / 8, sampleRate / 2, 60));
         this.channel = new ComplexFIR(designLowpass(this.CHANNEL_TAPS, 75.0, audioRate, 60));
         this.channelCutoff = 0.0;
 
@@ -115,9 +117,12 @@ class DidahDemodulator {
         this.agcSpeed = 'medium';
         this.agc = new AGC(this.audioRate);
 
-        // 96 kHz IQ is halfband-decimated 2:1 to 48 kHz audio. Kiwi IQ (~12 kHz) is already
-        // audio-rate, so NCO / channel / BFO run at iqRate with no decimator.
-        this.decimate2 = this.iqRate >= 72000;
+        // 96 kHz IQ: one halfband 2:1 → 48 kHz. 192 kHz: two halfbands 4:1 → 48 kHz.
+        // Kiwi (~12 kHz) and 48 kHz sound-card IQ skip the decimator.
+        this.decim = this.iqRate >= 144000 ? 4 : this.iqRate >= 72000 ? 2 : 1;
+        this.decimate2 = this.decim >= 2;
+        this.hb1Fill = 0;
+        this.hb2Fill = 0;
 
         // Output buffer, reused across calls (re-allocated only if the packet size changes)
         this.audioOut = new Float32Array(0);
@@ -133,16 +138,23 @@ class DidahDemodulator {
 
     /**
      * Rebuild the NCO/halfband/channel chain for a new IQ sample rate.
-     * Rates >= 72 kHz keep the 2:1 halfband to 48 kHz audio; slower IQ (Kiwi ~12 kHz)
-     * is demodulated at the IQ rate and resampled in the audio worklet.
+     * 192 kHz → 4:1 to 48 kHz audio; 96 kHz → 2:1 to 48 kHz; slower IQ (48 kHz sound card,
+     * Kiwi ~12 kHz) is demodulated at the IQ rate and resampled in the audio worklet if needed.
      */
     setIqRate(iqRate) {
         const rate = Math.max(1000, iqRate);
-        if (rate === this.iqRate && ((rate >= 72000) === this.decimate2)) return;
+        const decim = rate >= 144000 ? 4 : rate >= 72000 ? 2 : 1;
+        if (rate === this.iqRate && decim === this.decim) return;
         this.iqRate = rate;
-        this.decimate2 = rate >= 72000;
-        const audioRate = this.decimate2 ? 48000 : rate;
+        this.decim = decim;
+        this.decimate2 = decim >= 2;
+        this.hb1Fill = 0;
+        this.hb2Fill = 0;
+        const audioRate = rate / decim;
         this.halfband.setTaps(designLowpass(31, this.iqRate / 4, this.iqRate, 60));
+        if (decim === 4) {
+            this.halfband2.setTaps(designLowpass(31, this.iqRate / 8, this.iqRate / 2, 60));
+        }
         if (audioRate !== this.audioRate) {
             this.audioRate = audioRate;
             this.agc = new AGC(this.audioRate);
@@ -222,17 +234,18 @@ class DidahDemodulator {
      */
     process(int16IQ) {
         const numComplex = int16IQ.length / 2;
-        const decim = this.decimate2;
-        const outLen = decim ? numComplex >> 1 : numComplex;
-        if (this.audioOut.length !== outLen) {
-            this.audioOut = new Float32Array(outLen);
-            this.tapI = new Float32Array(outLen);
-            this.tapQ = new Float32Array(outLen);
+        const decim = this.decim;
+        const maxOut = Math.ceil(numComplex / decim) + 1;
+        if (this.audioOut.length < maxOut) {
+            this.audioOut = new Float32Array(maxOut);
+            this.tapI = new Float32Array(maxOut);
+            this.tapQ = new Float32Array(maxOut);
         }
         const out = this.audioOut;
         const tapI = this.tapI, tapQ = this.tapQ;
 
         const halfband = this.halfband;
+        const halfband2 = this.halfband2;
         const channel = this.channel;
         const ncoStep = this.ncoStep;
         const bfoStep = this.bfoStep;
@@ -240,32 +253,11 @@ class DidahDemodulator {
         const inv32768 = 1.0 / 32768.0;
         let ncoPhase = this.ncoPhase;
         let bfoPhase = this.bfoPhase;
+        let hb1Fill = this.hb1Fill;
+        let hb2Fill = this.hb2Fill;
+        let o = 0;
 
-        for (let n = 0, o = 0; n < numComplex; ) {
-            const samplesThisOut = decim ? 2 : 1;
-            if (n + samplesThisOut > numComplex) break;
-            for (let k = 0; k < samplesThisOut; k++) {
-                const idx = (n + k) * 2;
-                const i = int16IQ[idx] * inv32768;
-                const q = int16IQ[idx + 1] * inv32768;
-                const c = Math.cos(ncoPhase);
-                const s = Math.sin(ncoPhase);
-                const si = i * c - q * s;
-                const sq = i * s + q * c;
-                ncoPhase += ncoStep;
-                if (ncoPhase > TWO_PI) ncoPhase -= TWO_PI;
-                else if (ncoPhase < -TWO_PI) ncoPhase += TWO_PI;
-                if (decim) {
-                    halfband.push(si, sq);
-                } else {
-                    channel.push(si, sq);
-                }
-            }
-            n += samplesThisOut;
-            if (decim) {
-                halfband.compute();
-                channel.push(halfband.outI, halfband.outQ);
-            }
+        const emit = () => {
             channel.compute();
             tapI[o] = channel.outI;
             tapQ[o] = channel.outQ;
@@ -274,13 +266,53 @@ class DidahDemodulator {
             if (bfoPhase > TWO_PI) bfoPhase -= TWO_PI;
             else if (bfoPhase < -TWO_PI) bfoPhase += TWO_PI;
             o++;
+        };
+
+        for (let n = 0; n < numComplex; n++) {
+            const idx = n * 2;
+            const i = int16IQ[idx] * inv32768;
+            const q = int16IQ[idx + 1] * inv32768;
+            const c = Math.cos(ncoPhase);
+            const s = Math.sin(ncoPhase);
+            const si = i * c - q * s;
+            const sq = i * s + q * c;
+            ncoPhase += ncoStep;
+            if (ncoPhase > TWO_PI) ncoPhase -= TWO_PI;
+            else if (ncoPhase < -TWO_PI) ncoPhase += TWO_PI;
+
+            if (decim === 1) {
+                channel.push(si, sq);
+                emit();
+                continue;
+            }
+
+            halfband.push(si, sq);
+            hb1Fill++;
+            if (hb1Fill < 2) continue;
+            hb1Fill = 0;
+            halfband.compute();
+            if (decim === 2) {
+                channel.push(halfband.outI, halfband.outQ);
+                emit();
+                continue;
+            }
+
+            halfband2.push(halfband.outI, halfband.outQ);
+            hb2Fill++;
+            if (hb2Fill < 2) continue;
+            hb2Fill = 0;
+            halfband2.compute();
+            channel.push(halfband2.outI, halfband2.outQ);
+            emit();
         }
 
         this.ncoPhase = ncoPhase;
         this.bfoPhase = bfoPhase;
+        this.hb1Fill = hb1Fill;
+        this.hb2Fill = hb2Fill;
 
-        if (this.tapCallback) this.tapCallback(tapI, tapQ, outLen);
-        return this.agc.process(out);
+        if (this.tapCallback) this.tapCallback(tapI, tapQ, o);
+        return this.agc.process(out.subarray(0, o));
     }
 }
 

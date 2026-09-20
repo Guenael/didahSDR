@@ -35,6 +35,8 @@ test('catalog default is VA2GKA replay; kiwi live defaults to F4KIY at 7.1 MHz',
     assert.equal(live.startFreq, 7100000);
     assert.equal(live.startMod, 'cw');
     assert.equal(findSource('missing').id, 'va2gka');
+    assert.equal(findSource('soundcard').protocol, 'soundcard');
+    assert.equal(findSource('soundcard').startFreq, 0);
 });
 
 test('normalizeKiwiUrl strips http(s), path, and whitespace then splits host/port', () => {

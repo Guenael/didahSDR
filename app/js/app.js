@@ -39,6 +39,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let source = findSource(state.selectedSourceId);
     let kiwi = null;
+    let sound = null;
 
     // 1. Initialize CW Adaptive Filter (from my_adaptive_iir_filter.py)
     const cwFilter = new CWAdaptiveFilter(state.fftSize);
@@ -191,7 +192,7 @@ document.addEventListener('DOMContentLoaded', () => {
         wasTransmitting = useTx;
 
         if (useTx) {
-            const nAudio = demodulator.decimate2 ? numComplex >> 1 : numComplex;
+            const nAudio = Math.max(1, Math.floor(numComplex / Math.max(1, demodulator.decim)));
             keyer.render(
                 nAudio, demodulator.audioRate,
                 numComplex, demodulator.iqRate,
@@ -266,6 +267,15 @@ document.addEventListener('DOMContentLoaded', () => {
         resetQrssAcc();
     }
 
+    function applyDialRange() {
+        if (source.protocol === 'soundcard') {
+            const nyq = Math.max(1000, Math.floor(state.sampleRate / 2));
+            valueDial.setRange(-nyq, nyq);
+        } else {
+            valueDial.setRange(0, 999999999);
+        }
+    }
+
     function applyIqRate(rate) {
         state.sampleRate = rate;
         demodulator.setIqRate(rate);
@@ -274,6 +284,7 @@ document.addEventListener('DOMContentLoaded', () => {
         cwDecoder.reset();
         resetIqPipeline();
         waterfall.setCenterFreq(state.centerFreq, rate);
+        applyDialRange();
         if (rate < 30000) waterfall.zoomMin();
         else if (waterfall.zoom <= 1.01) waterfall.setZoom(2.67);
     }
@@ -330,8 +341,60 @@ document.addEventListener('DOMContentLoaded', () => {
         return kiwi;
     }
 
+    function fillSoundDeviceSelect(devices) {
+        const sel = document.getElementById('sound-device');
+        if (!sel) return;
+        const want = sel.value || (sound && sound.deviceId) || '';
+        sel.innerHTML = '';
+        if (!devices.length) {
+            sel.appendChild(new Option('No audio inputs found', ''));
+            sel.classList.remove('has-unsupported');
+            return;
+        }
+        for (let i = 0; i < devices.length; i++) {
+            const d = devices[i];
+            const hz = d.rate || d.native;
+            const rateTxt = hz ? `${(hz / 1000).toFixed(hz % 1000 ? 1 : 0)} kHz` : '?';
+            const opt = new Option(`${d.label} · ${rateTxt}${d.ok ? '' : ' — unsupported'}`, d.id);
+            opt.disabled = !d.ok;
+            if (!d.ok) opt.className = 'is-unsupported';
+            sel.appendChild(opt);
+        }
+        const match = devices.find((d) => d.id === want && d.ok);
+        const firstOk = devices.find((d) => d.ok);
+        sel.value = match ? match.id : (firstOk ? firstOk.id : '');
+        const chosen = devices.find((d) => d.id === sel.value);
+        sel.classList.toggle('has-unsupported', !!(chosen && !chosen.ok));
+    }
+
+    function ensureSound() {
+        if (sound) return sound;
+        sound = new SoundcardSource({
+            onRawIQ: processRawIQ,
+            onReady: (info) => {
+                if (source.protocol !== 'soundcard') return;
+                applyIqRate(info.sampleRate);
+                state.centerFreq = 0;
+                waterfall.setCenterFreq(0, state.sampleRate);
+                setTunedFrequency(state.tunedFreq, true, false);
+                updateTopBarInfo();
+                updateSourceStatus();
+            },
+            onStatusChange: (statusText, isConnected) => {
+                if (source.protocol !== 'soundcard') return;
+                setStatus(statusText, isConnected);
+            },
+            onDevices: fillSoundDeviceSelect
+        });
+        const swapEl = document.getElementById('sound-iq-swap');
+        if (swapEl) sound.setSwap(swapEl.checked);
+        return sound;
+    }
+
     function isActiveConnected() {
-        return source.protocol === 'kiwi' ? !!(kiwi && kiwi.connected) : conn.connected;
+        if (source.protocol === 'kiwi') return !!(kiwi && kiwi.connected);
+        if (source.protocol === 'soundcard') return !!(sound && sound.connected);
+        return conn.connected;
     }
 
     function connectActive() {
@@ -346,6 +409,19 @@ document.addEventListener('DOMContentLoaded', () => {
             k.startFreqHz = source.startFreq;
             k.ddcHz = state.centerFreq;
             k.connect();
+        } else if (source.protocol === 'soundcard') {
+            const s = ensureSound();
+            const sel = document.getElementById('sound-device');
+            const id = (sel && sel.value) || s.deviceId;
+            if (!id) {
+                s.enable().then((ok) => {
+                    if (!ok || source.protocol !== 'soundcard' || !state.running) return;
+                    const sel2 = document.getElementById('sound-device');
+                    if (sel2 && sel2.value) s.start(sel2.value);
+                });
+                return;
+            }
+            s.start(id);
         } else {
             conn.connect();
         }
@@ -353,6 +429,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function disconnectTransports() {
         if (kiwi) kiwi.disconnect();
+        if (sound) sound.stop();
         conn.disconnect();
     }
 
@@ -489,10 +566,15 @@ document.addEventListener('DOMContentLoaded', () => {
         updateTrxLeds();
     }
 
+    function formatCenter(hz) {
+        if (Math.abs(hz) < 1000000) return `${hz} Hz`;
+        return `${(hz / 1000000).toFixed(4)} MHz`;
+    }
+
     function updateTopBarInfo() {
         const cfBadge = document.getElementById('center-freq-badge');
         const srBadge = document.getElementById('sample-rate-badge');
-        if (cfBadge) cfBadge.textContent = `CF: ${(state.centerFreq / 1000000).toFixed(4)} MHz`;
+        if (cfBadge) cfBadge.textContent = `CF: ${formatCenter(state.centerFreq)}`;
         if (srBadge) {
             const khz = state.sampleRate / 1000;
             srBadge.textContent = `SR: ${Number.isInteger(khz) ? khz : khz.toFixed(2)} kHz`;
@@ -502,13 +584,18 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateSourceStatus() {
         const el = document.getElementById('source-status');
         if (!el) return;
-        const proto = source.protocol === 'kiwi' ? 'KiwiSDR SND IQ' : 'didah 0x03 IQ';
+        const proto = source.protocol === 'kiwi' ? 'KiwiSDR SND IQ'
+            : source.protocol === 'soundcard' ? 'Sound card IQ'
+            : 'didah 0x03 IQ';
         const khz = state.sampleRate / 1000;
         const srTxt = `${Number.isInteger(khz) ? khz : khz.toFixed(2)} kHz`;
-        const cf = `${(state.centerFreq / 1000000).toFixed(4)} MHz`;
-        const extra = source.protocol === 'kiwi'
-            ? ` ${source.host}:${source.port}. Waterfall is a 12 kHz zoom; mouse and wheel move the Kiwi DDC.`
-            : '';
+        const cf = formatCenter(state.centerFreq);
+        let extra = '';
+        if (source.protocol === 'kiwi') {
+            extra = ` ${source.host}:${source.port}. Waterfall is a 12 kHz zoom; mouse and wheel move the Kiwi DDC.`;
+        } else if (source.protocol === 'soundcard') {
+            extra = ' Centre is 0 Hz (offset). Swap I/Q if the spectrum is reversed.';
+        }
         el.textContent = `${proto} · ${srTxt} · CF ${cf}.${extra}`;
     }
 
@@ -590,15 +677,18 @@ document.addEventListener('DOMContentLoaded', () => {
         lastDspControl = '';
         state.userHasTuned = false;
         state.tunedFreq = src.startFreq;
-        valueDial.setValue(state.tunedFreq, false);
         if (src.protocol === 'kiwi') {
             state.centerFreq = src.startFreq;
             applyIqRate(12000);
             if (kiwi) kiwi.ddcHz = src.startFreq;
+        } else if (src.protocol === 'soundcard') {
+            state.centerFreq = 0;
+            applyIqRate((sound && sound.sampleRate) || 96000);
         } else {
             state.centerFreq = 14048000;
             applyIqRate(96000);
         }
+        valueDial.setValue(state.tunedFreq, false);
         setModulation(src.startMod);
         state.userHasTuned = false;
         updateTopBarInfo();
@@ -637,6 +727,7 @@ document.addEventListener('DOMContentLoaded', () => {
             waterfall.setShowPassband(true);
             audioPlayer.stop();
             smeter.reset();
+            if (source.protocol === 'soundcard' && sound) sound.stop();
             updateTrxLeds();
         }
     });
@@ -1069,6 +1160,10 @@ document.addEventListener('DOMContentLoaded', () => {
         out.selectedSourceId = state.selectedSourceId;
         const kiwiUrlEl = document.getElementById('kiwi-url');
         if (kiwiUrlEl) out.kiwiUrl = kiwiUrlEl.value;
+        const soundDev = document.getElementById('sound-device');
+        if (soundDev && soundDev.value) out.soundDeviceId = soundDev.value;
+        const swapEl = document.getElementById('sound-iq-swap');
+        if (swapEl) out.iqSwap = !!swapEl.checked;
         try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(out)); } catch (e) { /* storage unavailable */ }
     }
 
@@ -1100,6 +1195,18 @@ document.addEventListener('DOMContentLoaded', () => {
         if (saved.kiwiUrl) {
             const el = document.getElementById('kiwi-url');
             if (el) el.value = saved.kiwiUrl;
+        }
+        if (saved.soundDeviceId) {
+            const el = document.getElementById('sound-device');
+            if (el) {
+                const opt = new Option('Saved device', saved.soundDeviceId);
+                el.appendChild(opt);
+                el.value = saved.soundDeviceId;
+            }
+        }
+        if (saved.iqSwap) {
+            const el = document.getElementById('sound-iq-swap');
+            if (el) el.checked = true;
         }
     }
 
@@ -1148,6 +1255,52 @@ document.addEventListener('DOMContentLoaded', () => {
             e.preventDefault();
             e.stopPropagation();
             connectKiwiFromInput();
+        });
+    }
+
+    const soundEnableBtn = document.getElementById('sound-enable-btn');
+    const soundDeviceSel = document.getElementById('sound-device');
+    const soundIqSwap = document.getElementById('sound-iq-swap');
+    const soundCard = document.querySelector('.source-option-soundcard');
+    if (soundCard) {
+        soundCard.addEventListener('click', (e) => {
+            if (e.target === soundEnableBtn || (soundEnableBtn && soundEnableBtn.contains(e.target))) return;
+            if (e.target === soundDeviceSel || e.target === soundIqSwap) return;
+            const radio = document.querySelector('input[name="iq-source"][value="soundcard"]');
+            if (radio && !radio.checked) {
+                radio.checked = true;
+                radio.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        });
+    }
+    if (soundEnableBtn) {
+        soundEnableBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const radio = document.querySelector('input[name="iq-source"][value="soundcard"]');
+            if (radio && !radio.checked) {
+                radio.checked = true;
+                radio.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            ensureSound().enable().then((ok) => {
+                if (!ok || source.protocol !== 'soundcard' || !state.running) return;
+                const sel = document.getElementById('sound-device');
+                if (sel && sel.value) ensureSound().start(sel.value);
+            });
+        });
+    }
+    if (soundDeviceSel) {
+        soundDeviceSel.addEventListener('change', () => {
+            const opt = soundDeviceSel.selectedOptions[0];
+            soundDeviceSel.classList.toggle('has-unsupported', !!(opt && opt.disabled));
+            if (source.protocol !== 'soundcard' || !state.running) return;
+            if (!soundDeviceSel.value) return;
+            ensureSound().start(soundDeviceSel.value);
+        });
+    }
+    if (soundIqSwap) {
+        soundIqSwap.addEventListener('change', () => {
+            ensureSound().setSwap(soundIqSwap.checked);
         });
     }
 

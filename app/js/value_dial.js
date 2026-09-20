@@ -35,6 +35,11 @@ class SDRValueDial {
 
         this.drumElements = [];
 
+        this.signEl = document.createElement('div');
+        this.signEl.className = 'dial-sign';
+        this.signEl.textContent = '';
+        this.wheelsContainer.appendChild(this.signEl);
+
         // Exponents: for 9 digits, exponents are 8, 7, 6, 5, 4, 3, 2, 1, 0
         // Separators inserted between exponents 6 & 5 (MHz), and 3 & 2 (kHz)
         for (let i = 0; i < this.numDigits; i++) {
@@ -66,11 +71,29 @@ class SDRValueDial {
         this.container.appendChild(this.unitBadge);
     }
 
+    setRange(min, max) {
+        this.min = min;
+        this.max = max;
+        if (this.signEl) this.signEl.style.display = min < 0 ? '' : 'none';
+        this.setValue(this.value, false);
+    }
+
     setValue(newValue, triggerCallback = true) {
         this.value = Math.max(this.min, Math.min(this.max, Math.round(newValue)));
 
-        // Pad with leading zeroes to numDigits
-        const str = this.value.toString().padStart(this.numDigits, '0');
+        if (this.signEl) {
+            if (this.min < 0) {
+                this.signEl.style.display = '';
+                this.signEl.textContent = this.value < 0 ? '−' : '+';
+                this.signEl.classList.toggle('is-negative', this.value < 0);
+            } else {
+                this.signEl.style.display = 'none';
+                this.signEl.textContent = '';
+            }
+        }
+
+        // Pad with leading zeroes to numDigits (absolute value; sign is a separate drum)
+        const str = Math.abs(this.value).toString().padStart(this.numDigits, '0');
         let firstNonZero = false;
 
         for (let i = 0; i < this.numDigits; i++) {
@@ -112,7 +135,7 @@ class SDRValueDial {
 
         const exp = parseInt(drum.dataset.exp, 10);
         const divisor = Math.pow(10, exp);
-        const rounded = Math.floor(this.value / divisor) * divisor;
+        const rounded = Math.trunc(this.value / divisor) * divisor;
         this.setValue(rounded, true);
     }
 
@@ -176,12 +199,14 @@ class SDRValueDial {
             } else if (e.key >= '0' && e.key <= '9') {
                 e.preventDefault();
                 // Replace digit at cursor position
-                const str = this.value.toString().padStart(this.numDigits, '0');
+                const abs = Math.abs(this.value);
+                const str = abs.toString().padStart(this.numDigits, '0');
                 const exp = this.numDigits - 1 - cur;
                 const oldDigit = parseInt(str[cur], 10);
                 const newDigit = parseInt(e.key, 10);
                 const delta = (newDigit - oldDigit) * Math.pow(10, exp);
-                this.setValue(this.value + delta, true);
+                const nextAbs = abs + delta;
+                this.setValue(this.value < 0 ? -nextAbs : nextAbs, true);
 
                 // Advance cursor to the right
                 if (cur < this.numDigits - 1) {

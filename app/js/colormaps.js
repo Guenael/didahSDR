@@ -128,7 +128,7 @@ const Colormaps = (function() {
         }
         return out;
     }
-    definitions["rocky-teal"] = { label: "Rocky-Teal", packed: permuteRgb([0, 2, 1]) };
+    definitions["tty"] = { label: "TTY", packed: permuteRgb([0, 2, 1]) };
 
     return {
         list: function() {

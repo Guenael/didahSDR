@@ -315,6 +315,9 @@ decodes more than the model does. Candidate improvements, grouped by where they 
 
 ## TODOs
 
+- IQ imbalance correction (amplitude and phase) for sound-card / SoftRock stereo IQ.
+- Hardware CW transmit: COM/PTT (and a sidetone) for a standard transceiver; stereo IQ DAC output for a zero-IF radio. Local F8/F9/F4 sidetone does not leave the browser.
+- Mono sound-card AF source (commercial radio, ~4 kHz BW): audio-Hz waterfall around 0, mix the beat note to DC for the CW decoder.
 - Add WebRTC audio streaming option for ultra-low latency server-demodulated streams.
 - Implement automated Morse CW decoder (text output window) using adaptive peak detection.
 - Add WebGL acceleration option for high-resolution 4K waterfall displays.
