@@ -261,7 +261,7 @@ html, body {
     color: #f87171;
 }
 
-/* S-Meter Button */
+/* SNR-Meter / floating-window toggle buttons */
 .smeter-btn {
     display: inline-flex;
     align-items: center;
@@ -779,7 +779,7 @@ kbd {
 }
 
 /* ==========================================================================
-   5. S-METER FLOATING WINDOW (SNR dB Above Noise Floor)
+   5. SNR-METER FLOATING WINDOW (SNR dB Above Noise Floor)
    ========================================================================== */
 .smeter-window {
     position: absolute;
@@ -974,7 +974,7 @@ kbd {
     overflow: visible;
 }
 
-/* Config window: stacked sections, reuses the S-Meter window chrome */
+/* Config window: stacked sections, reuses the SNR-Meter window chrome */
 .wconfig-window {
     width: 340px;
     max-height: calc(100vh - 72px);

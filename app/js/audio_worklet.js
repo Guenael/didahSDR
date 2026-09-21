@@ -260,6 +260,11 @@ if (typeof registerProcessor !== 'undefined') {
                 case 'arm':
                     k.armed = !!m.on;
                     k.stopText = !k.armed;
+                    if (!k.armed) {
+                        k.setPaddle('dit', false);
+                        k.setPaddle('dah', false);
+                        k.setStraight(false);
+                    }
                     break;
                 case 'hasText':
                     this.hasText = !!m.on;

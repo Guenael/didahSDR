@@ -1,9 +1,11 @@
 /**
- * didahSDR - SNR S-Meter Component
- * 
- * Reports the difference between the tuned signal and the local RF noise floor
- * on a dedicated 0 to 40+ dB scale (0 ... 10 ... 20 ... 30 ... 40+ dB).
- * 
+ * didahSDR - SNR-Meter Component
+ *
+ * (S+N)/N in the tuned passband: mean linear power inside the channel versus mean
+ * linear power in neighbouring bins. Locally white noise reads ~0 dB; a signal
+ * in the passband reads how far that channel sits above the local floor.
+ * Scale is 0 ... 10 ... 20 ... 30 ... 40+ dB.
+ *
  * Features:
  * - Floating, draggable window (chrome shared with W-Config via floating_window.js)
  * - Fast attack (~20ms) and natural decay (~150ms) ballistics for CW Morse bursts
@@ -11,6 +13,9 @@
  * - Precision vector SVG scale perfectly aligned with the LED gradient bargraph
  * - Instantaneous numerical readout, peak readout, and mode/bandwidth badge
  */
+
+const SNR_DB_TO_LN = Math.LN10 / 10;
+const SNR_LN_TO_DB = 10 / Math.LN10;
 
 class DidahSMeter {
     constructor() {
@@ -29,10 +34,6 @@ class DidahSMeter {
         this.peakHoldUntil = 0;
         this.lastUpdateTime = 0;
         this.lastRenderTime = 0;
-
-        // Preallocated scratch array for local noise percentile calculation (zero GC allocations)
-        this.noiseScratch = new Float32Array(256);
-
     }
 
     init() {
@@ -104,11 +105,11 @@ class DidahSMeter {
     }
 
     /**
-     * Compute instantaneous SNR in dB above local noise floor and update meter.
+     * Mean-power (S+N)/N in dB for the tuned passband vs neighbouring bins.
+     * Returns a signed value (white noise ~0); null if the windows are unusable.
+     * No allocations — safe on the FFT path.
      */
-    updateFromSpectrum(specDb, sampleRate, centerFreq, tunedFreq, modulation, bandwidth) {
-        if (!this.visible || !this.container) return;
-
+    computeSnrDb(specDb, sampleRate, centerFreq, tunedFreq, modulation, bandwidth) {
         const nfft = specDb.length;
         const binWidth = sampleRate / nfft;
         const offsetHz = tunedFreq - centerFreq;
@@ -122,7 +123,6 @@ class DidahSMeter {
             kStart = Math.max(0, k0 - halfBins);
             kEnd = Math.min(nfft - 1, k0 + halfBins);
         } else if (MODES[mod] && MODES[mod].low !== null) {
-            // SSB: same passband as the demodulator channel filter
             const m = MODES[mod];
             kStart = Math.max(0, k0 + Math.round(m.low / binWidth));
             kEnd = Math.min(nfft - 1, k0 + Math.round(m.high / binWidth));
@@ -132,44 +132,40 @@ class DidahSMeter {
             kEnd = Math.min(nfft - 1, k0 + halfBins);
         }
 
-        if (kEnd <= kStart) return;
+        if (kEnd <= kStart) return null;
 
-        // 1. Peak power in passband
-        let maxPassbandDb = -999.0;
+        let passSum = 0.0;
+        let passCount = 0;
         for (let k = kStart; k <= kEnd; k++) {
-            if (specDb[k] > maxPassbandDb) {
-                maxPassbandDb = specDb[k];
-            }
+            passSum += Math.exp(specDb[k] * SNR_DB_TO_LN);
+            passCount++;
         }
 
-        // 2. Measure local background noise floor from surrounding spectrum bins (+/- 1.5 kHz)
         const noiseSpan = Math.max(16, Math.round(1500 / binWidth));
+        let noiseSum = 0.0;
         let noiseCount = 0;
-
-        // Left noise window
         const leftStart = Math.max(0, kStart - noiseSpan);
         for (let k = leftStart; k < kStart; k++) {
-            this.noiseScratch[noiseCount++] = specDb[k];
+            noiseSum += Math.exp(specDb[k] * SNR_DB_TO_LN);
+            noiseCount++;
         }
-        // Right noise window
         const rightEnd = Math.min(nfft - 1, kEnd + noiseSpan);
         for (let k = kEnd + 1; k <= rightEnd; k++) {
-            this.noiseScratch[noiseCount++] = specDb[k];
+            noiseSum += Math.exp(specDb[k] * SNR_DB_TO_LN);
+            noiseCount++;
         }
 
-        let localNoiseFloorDb = -115.0;
-        if (noiseCount >= 8) {
-            const valid = this.noiseScratch.subarray(0, noiseCount);
-            valid.sort();
-            // 25th percentile represents clean noise floor even in presence of adjacent signals
-            localNoiseFloorDb = valid[Math.floor(noiseCount * 0.25)];
-        }
+        if (passCount < 1 || noiseCount < 8 || !(noiseSum > 0) || !(passSum > 0)) return null;
+        return SNR_LN_TO_DB * Math.log((passSum / passCount) / (noiseSum / noiseCount));
+    }
 
-        // Difference between tuned signal and noise floor
-        const rawDiffDb = maxPassbandDb - localNoiseFloorDb;
-        // Apply slight deadband (~2.0 dB) to account for natural Rayleigh variance in pure noise
-        const rawSnrDb = Math.max(0.0, rawDiffDb - 2.0);
-
+    /**
+     * Compute instantaneous SNR and update the meter ballistics / DOM.
+     */
+    updateFromSpectrum(specDb, sampleRate, centerFreq, tunedFreq, modulation, bandwidth) {
+        if (!this.visible || !this.container) return;
+        const rawSnrDb = this.computeSnrDb(specDb, sampleRate, centerFreq, tunedFreq, modulation, bandwidth);
+        if (rawSnrDb == null || !Number.isFinite(rawSnrDb)) return;
         this.applyBallistics(rawSnrDb);
         this.render();
     }

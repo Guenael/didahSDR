@@ -31,6 +31,12 @@ document.addEventListener('DOMContentLoaded', () => {
         ssbLow: 200,
         ssbHigh: 2700,
         qrssEnabled: false,
+        autonotchEnabled: false,
+        autonotchDepth: 70,
+        nrEnabled: false,
+        nrStrength: 50,
+        squelchEnabled: false,
+        squelchMargin: 10,
         wpm: 20,
         iambicMode: 'B'
     };
@@ -65,6 +71,9 @@ document.addEventListener('DOMContentLoaded', () => {
     demodulator.setAgcSpeed(state.agcSpeed);
     demodulator.setCwBandwidth(state.cwBandwidth);
     demodulator.setBfoPitch(state.cwOffset);
+    demodulator.setAutonotchDepth(state.autonotchDepth);
+    demodulator.setNrStrength(state.nrStrength);
+    demodulator.setSquelchMarginDb(state.squelchMargin);
 
     const keyer = new CwKeyer();
     keyer.setWpm(state.wpm);
@@ -134,7 +143,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return Math.max(4, 16 * (9 - speed));
     }
 
-    // 7b. Initialize SNR S-Meter (0 to 40+ dB above local noise floor)
+    // 7b. Initialize SNR-Meter (0 to 40+ dB above local noise floor)
     const smeter = new DidahSMeter();
     smeter.init();
     smeter.setModeInfo(state.modulation, state.cwBandwidth);
@@ -157,6 +166,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function paddleDown() {
         return keyer.ditDown || keyer.dahDown || keyer.straightDown;
+    }
+
+    function releasePaddles() {
+        keyer.setPaddle('dit', false);
+        keyer.setPaddle('dah', false);
+        keyer.setStraight(false);
+        audioPlayer.setKeyerPaddle('dit', false);
+        audioPlayer.setKeyerPaddle('dah', false);
+        audioPlayer.setKeyerStraight(false);
+        updateTrxLeds();
     }
 
     function isLocalTx() {
@@ -592,6 +611,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!cw) {
             keyer.armed = false;
             keyer.stopText = true;
+            releasePaddles();
             keyer.abort();
             audioPlayer.abortKeyer();
             workletTx = false;
@@ -815,7 +835,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // 4. Config floating window (waterfall / CW / SSB), same behaviour as the S-Meter window
+    // 4. Config floating window (waterfall / CW / SSB), same behaviour as the SNR-Meter window
     setupFloatingWindow({
         windowId: 'wconfig-window', headerId: 'wconfig-header', closeBtnId: 'wconfig-close-btn',
         toggleBtnId: 'wconfig-btn', storageKey: 'didah_wconfig', defaultVisible: false,
@@ -1005,6 +1025,79 @@ document.addEventListener('DOMContentLoaded', () => {
         qrssToggle.addEventListener('click', () => setQrssEnabled(!state.qrssEnabled));
     }
 
+    function setAutonotchEnabled(on) {
+        state.autonotchEnabled = !!on;
+        demodulator.setAutonotchEnabled(state.autonotchEnabled);
+        const btn = document.getElementById('autonotch-toggle');
+        if (btn) {
+            btn.classList.toggle('active', state.autonotchEnabled);
+            btn.textContent = state.autonotchEnabled ? 'Autonotch: ON' : 'Autonotch: OFF';
+        }
+    }
+
+    function setNrEnabled(on) {
+        state.nrEnabled = !!on;
+        demodulator.setNrEnabled(state.nrEnabled);
+        const btn = document.getElementById('nr-toggle');
+        if (btn) {
+            btn.classList.toggle('active', state.nrEnabled);
+            btn.textContent = state.nrEnabled ? 'Noise Reduction: ON' : 'Noise Reduction: OFF';
+        }
+    }
+
+    function setSquelchEnabled(on) {
+        state.squelchEnabled = !!on;
+        demodulator.setSquelchEnabled(state.squelchEnabled);
+        const btn = document.getElementById('squelch-toggle');
+        if (btn) {
+            btn.classList.toggle('active', state.squelchEnabled);
+            btn.textContent = state.squelchEnabled ? 'Squelch: ON' : 'Squelch: OFF';
+        }
+    }
+
+    const autonotchToggle = document.getElementById('autonotch-toggle');
+    if (autonotchToggle) {
+        autonotchToggle.addEventListener('click', () => setAutonotchEnabled(!state.autonotchEnabled));
+    }
+    const nrToggle = document.getElementById('nr-toggle');
+    if (nrToggle) {
+        nrToggle.addEventListener('click', () => setNrEnabled(!state.nrEnabled));
+    }
+    const squelchToggle = document.getElementById('squelch-toggle');
+    if (squelchToggle) {
+        squelchToggle.addEventListener('click', () => setSquelchEnabled(!state.squelchEnabled));
+    }
+
+    const autonotchDepthSlider = document.getElementById('autonotch-depth-slider');
+    const autonotchDepthVal = document.getElementById('autonotch-depth-val');
+    if (autonotchDepthSlider) {
+        autonotchDepthSlider.addEventListener('input', (e) => {
+            state.autonotchDepth = parseInt(e.target.value, 10);
+            if (autonotchDepthVal) autonotchDepthVal.textContent = `${state.autonotchDepth}%`;
+            demodulator.setAutonotchDepth(state.autonotchDepth);
+        });
+    }
+
+    const nrStrengthSlider = document.getElementById('nr-strength-slider');
+    const nrStrengthVal = document.getElementById('nr-strength-val');
+    if (nrStrengthSlider) {
+        nrStrengthSlider.addEventListener('input', (e) => {
+            state.nrStrength = parseInt(e.target.value, 10);
+            if (nrStrengthVal) nrStrengthVal.textContent = `${state.nrStrength}%`;
+            demodulator.setNrStrength(state.nrStrength);
+        });
+    }
+
+    const squelchThrSlider = document.getElementById('squelch-thr-slider');
+    const squelchThrVal = document.getElementById('squelch-thr-val');
+    if (squelchThrSlider) {
+        squelchThrSlider.addEventListener('input', (e) => {
+            state.squelchMargin = parseInt(e.target.value, 10);
+            if (squelchThrVal) squelchThrVal.textContent = `${state.squelchMargin} dB`;
+            demodulator.setSquelchMarginDb(state.squelchMargin);
+        });
+    }
+
     const kernelSelect = document.getElementById('kernel-select');
     if (kernelSelect) {
         kernelSelect.addEventListener('change', (e) => {
@@ -1036,7 +1129,10 @@ document.addEventListener('DOMContentLoaded', () => {
         keyer.stopText = !keyer.armed;
         audioPlayer.setKeyerArmed(keyer.armed);
         if (keyer.armed) syncKeyerText();
-        else audioPlayer.setKeyerHasText(false);
+        else {
+            audioPlayer.setKeyerHasText(false);
+            releasePaddles();
+        }
         updateTxUi();
     }
 
@@ -1115,7 +1211,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (paddle) {
             e.preventDefault();
             if (e.repeat) return;
-            if (state.modulation !== 'cw') return;
+            if (state.modulation !== 'cw' || !keyer.armed) return;
             audioPlayer.resume();
             if (paddle === 'straight') {
                 keyer.setStraight(true);
@@ -1211,6 +1307,9 @@ document.addEventListener('DOMContentLoaded', () => {
         ['agcSpeed', 'agc-select', 'change'],
         ['filterKernel', 'kernel-select', 'change'],
         ['wpm', 'wpm-slider', 'input'],
+        ['autonotchDepth', 'autonotch-depth-slider', 'input'],
+        ['nrStrength', 'nr-strength-slider', 'input'],
+        ['squelchMargin', 'squelch-thr-slider', 'input'],
     ];
 
     function saveSettings() {
@@ -1218,6 +1317,9 @@ document.addEventListener('DOMContentLoaded', () => {
         for (const [key] of SETTINGS) out[key] = state[key];
         out.filterEnabled = state.filterEnabled;
         out.qrssEnabled = state.qrssEnabled;
+        out.autonotchEnabled = state.autonotchEnabled;
+        out.nrEnabled = state.nrEnabled;
+        out.squelchEnabled = state.squelchEnabled;
         out.iambicMode = state.iambicMode;
         out.selectedSourceId = state.selectedSourceId;
         const kiwiUrlEl = document.getElementById('kiwi-url');
@@ -1243,6 +1345,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (saved.filterEnabled !== undefined && saved.filterEnabled !== state.filterEnabled) cwFilterToggle.click();
         if (saved.qrssEnabled !== undefined && saved.qrssEnabled !== state.qrssEnabled) setQrssEnabled(!!saved.qrssEnabled);
+        if (saved.autonotchEnabled !== undefined && saved.autonotchEnabled !== state.autonotchEnabled) {
+            setAutonotchEnabled(!!saved.autonotchEnabled);
+        }
+        if (saved.nrEnabled !== undefined && saved.nrEnabled !== state.nrEnabled) setNrEnabled(!!saved.nrEnabled);
+        if (saved.squelchEnabled !== undefined && saved.squelchEnabled !== state.squelchEnabled) {
+            setSquelchEnabled(!!saved.squelchEnabled);
+        }
         if (saved.iambicMode === 'A' || saved.iambicMode === 'B') {
             const el = document.querySelector(`input[name="iambic-mode"][value="${saved.iambicMode}"]`);
             if (el) {

@@ -254,7 +254,7 @@ The container runs as an unprivileged user (`app`, UID 1000) on a minimal Debian
 
 ## CW decoder: possible improvements
 
-The neural CW decoder (`app/js/cw_decoder*.js`, model trained in the sibling repo `didahSDR-cw-training-model`, design in its `PLAN3.md`) is a
+The neural CW decoder (`app/js/cw_decoder*.js`, model trained in the sibling repo `didahSDR-cw-training-model`, design in its `TRAINING.md`) is a
 first version. Observed on real traffic with v2: recognisable contest exchanges, but a CW operator still
 decodes more than the model does. Candidate improvements, grouped by where they live.
 

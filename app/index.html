@@ -40,9 +40,9 @@
                     <span>Source</span>
                 </button>
 
-                <button id="smeter-btn" class="smeter-btn active" title="Toggle SNR S-Meter Window">
+                <button id="smeter-btn" class="smeter-btn active" title="Toggle SNR-Meter Window">
                     <span class="smeter-icon">📶</span>
-                    <span>S-Meter</span>
+                    <span>SNR-Meter</span>
                 </button>
 
                 <button id="decoder-btn" class="smeter-btn" title="Toggle CW Decoder Window">
@@ -70,14 +70,14 @@
         <!-- 2. HORIZONTAL WATERFALL (Right to Left) WITH RULER -->
         <main id="waterfall-area"></main>
 
-        <!-- S-METER FLOATING WINDOW (SNR dB Above Noise Floor) -->
+        <!-- SNR-METER FLOATING WINDOW (SNR dB Above Noise Floor) -->
         <div id="smeter-window" class="smeter-window" style="display: none;">
             <div id="smeter-header" class="smeter-header">
                 <div class="smeter-title">
                     <span class="smeter-drag-icon">⋮⋮</span>
-                    <span>S-METER · SNR dB</span>
+                    <span>SNR-METER</span>
                 </div>
-                <button id="smeter-close-btn" class="smeter-close-btn" title="Close S-Meter">✕</button>
+                <button id="smeter-close-btn" class="smeter-close-btn" title="Close SNR-Meter">✕</button>
             </div>
             <div class="smeter-body">
                 <div class="smeter-readout-row">
@@ -185,6 +185,34 @@
                         <span id="ssb-high-val" class="slider-val">2700 Hz</span>
                     </div>
                 </div>
+
+                <div class="wconfig-section" id="audio-fx-section">
+                    <div class="wconfig-section-title">AUDIO</div>
+                    <div class="control-group">
+                        <button id="autonotch-toggle" class="toggle-btn" title="Cancel steady heterodynes and carriers in the passband">Autonotch: OFF</button>
+                    </div>
+                    <div class="control-group slider-container">
+                        <label for="autonotch-depth-slider">Depth:</label>
+                        <input id="autonotch-depth-slider" type="range" min="25" max="100" step="5" value="70" autocomplete="off">
+                        <span id="autonotch-depth-val" class="slider-val">70%</span>
+                    </div>
+                    <div class="control-group">
+                        <button id="nr-toggle" class="toggle-btn" title="LMS noise reduction: keep correlated CW/SSB, reject hiss">Noise Reduction: OFF</button>
+                    </div>
+                    <div class="control-group slider-container">
+                        <label for="nr-strength-slider">Strength:</label>
+                        <input id="nr-strength-slider" type="range" min="25" max="100" step="5" value="50" autocomplete="off">
+                        <span id="nr-strength-val" class="slider-val">50%</span>
+                    </div>
+                    <div class="control-group">
+                        <button id="squelch-toggle" class="toggle-btn" title="Mute the speaker until the channel is this many dB above the noise floor">Squelch: OFF</button>
+                    </div>
+                    <div class="control-group slider-container">
+                        <label for="squelch-thr-slider">Margin:</label>
+                        <input id="squelch-thr-slider" type="range" min="0" max="40" step="1" value="10" autocomplete="off">
+                        <span id="squelch-thr-val" class="slider-val">10 dB</span>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -270,11 +298,10 @@
                             <button type="button" id="kiwi-connect-btn" class="source-connect-btn" title="Connect to this KiwiSDR">Connect</button>
                         </div>
                         <p id="kiwi-url-hint" class="source-url-hint">
-                            Example:<br>
-                            - <code>http://f4kiy.ddns.net:8073</code><br>
-                            - <code>http://oh5ae.dyndns.org:8073</code><br>
-                            Map of the KiwiSDR receivers:<br>
+                            IMPORTANT: A localhost server is required for unencrypted channels<br>
+                            KiwiSDR receivers list/map:<br>
                             <a href="http://rx.linkfanel.net/" target="_blank" rel="noopener noreferrer">http://rx.linkfanel.net/</a>
+                            <a href="http://kiwisdr.com/public/" target="_blank" rel="noopener noreferrer">http://kiwisdr.com/public/</a>
                         </p>
                     </div>
                 </div>
@@ -446,9 +473,9 @@ ffmpeg -re -stream_loop -1 -i samples/SAMPLE2.wav \
                         <div><kbd>Home</kbd> / <kbd>End</kbd></div><div>Zoom Min / Zoom Max</div>
                         <div><kbd>+</kbd> / <kbd>-</kbd></div><div>Change the step (10 Hz &rarr; 5 kHz)</div>
                         <div><kbd>Esc</kbd></div><div>Close this Help dialog</div>
-                        <div><kbd>F8</kbd></div><div>CW dit paddle (local sidetone)</div>
-                        <div><kbd>F9</kbd></div><div>CW dah paddle (iambic squeeze with F8)</div>
-                        <div><kbd>F4</kbd></div><div>CW straight key (tone while held)</div>
+                        <div><kbd>F8</kbd></div><div>CW dit paddle (PTT On, local sidetone)</div>
+                        <div><kbd>F9</kbd></div><div>CW dah paddle (iambic squeeze with F8; PTT On)</div>
+                        <div><kbd>F4</kbd></div><div>CW straight key (PTT On, tone while held)</div>
                     </div>
                 </section>
 
@@ -459,13 +486,13 @@ ffmpeg -re -stream_loop -1 -i samples/SAMPLE2.wav \
                         The waterfall freezes while you key (the history from before TX stays on screen)
                         and RX audio is muted. Sidetone is generated on the audio clock so F8/F9/F4
                         track the paddles without the receive jitter buffer.
-                        <strong>PTT Off</strong> / <strong>PTT On</strong> arms the typeahead line (bright red).
-                        Typing, or clicking PTT On with text already in the box, keys a sidetone at the
-                        CW BFO. The buffer grows if you type faster than Morse; when it empties, RX
-                        returns after one extra letter-space (no RX between letters). Click PTT On
-                        again to disarm (PTT Off); remaining text stays in the box.
-                        F8/F9 are an iambic paddle (mode A/B in Settings, B default); F4 is a straight key.
-                        Paddles work even when PTT is not armed.
+                        <strong>PTT Off</strong> / <strong>PTT On</strong> arms both the typeahead line
+                        (bright red) and the paddle keys. Typing, or clicking PTT On with text already
+                        in the box, keys a sidetone at the CW BFO. The buffer grows if you type faster
+                        than Morse; when it empties, RX returns after one extra letter-space (no RX
+                        between letters). Click PTT On again to disarm (PTT Off); remaining text stays
+                        in the box. F8/F9 are an iambic paddle (mode A/B in Settings, B default); F4
+                        is a straight key. F8/F9/F4 are ignored while PTT is Off.
                     </p>
                 </section>
 
@@ -495,6 +522,7 @@ ffmpeg -re -stream_loop -1 -i samples/SAMPLE2.wav \
     <script src="js/cw_filter.js"></script>
     <script src="js/fft.js"></script>
     <script src="js/agc.js"></script>
+    <script src="js/audio_fx.js"></script>
     <script src="js/demodulator.js"></script>
     <script src="js/floating_window.js"></script>
     <script src="js/value_dial.js"></script>

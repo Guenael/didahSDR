@@ -1,5 +1,5 @@
 /**
- * didahSDR - Draggable floating window (S-Meter, W-Config)
+ * didahSDR - Draggable floating window (SNR-Meter, W-Config)
  *
  * Toggle button in the top bar, close button, header drag with viewport clamping; position and
  * visibility persisted in localStorage under `${storageKey}_visible|_top|_left`.

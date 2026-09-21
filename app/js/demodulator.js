@@ -9,7 +9,9 @@
  *                 cutoff = passband / 2. Everything outside the wanted passband, including the
  *                 opposite sideband, is gone after this stage. This is the sideband selection.
  *   4. BFO      : rotate by +pitch (CW) or the SSB passband centre (USB +, LSB −) and take Re().
- *   5. AGC (in place).
+ *   5. Autonotch / NR (optional, real audio, in place).
+ *   6. AGC (in place).
+ *   7. Squelch gate (optional; power is measured on the pre-AGC buffer).
  *   A tap on the stage-3 output (complex, pre-BFO, pre-AGC) feeds the CW decoder (cw_decoder.js).
  *
  * Image rejection is set by the channel filter stopband (~60 dB), not by IQ balance tricks.
@@ -117,6 +119,10 @@ class DidahDemodulator {
         this.agcSpeed = 'medium';
         this.agc = new AGC(this.audioRate);
 
+        this.autoNotch = new DidahAutoNotch();
+        this.nr = new DidahNoiseReduction();
+        this.squelch = new DidahSquelch(this.audioRate);
+
         // 96 kHz IQ: one halfband 2:1 → 48 kHz. 192 kHz: two halfbands 4:1 → 48 kHz.
         // Kiwi (~12 kHz) and 48 kHz sound-card IQ skip the decimator.
         this.decim = this.iqRate >= 144000 ? 4 : this.iqRate >= 72000 ? 2 : 1;
@@ -159,9 +165,11 @@ class DidahDemodulator {
             this.audioRate = audioRate;
             this.agc = new AGC(this.audioRate);
             this.agc.setSpeed(this.agcSpeed);
+            this.squelch.setSampleRate(this.audioRate);
         }
         this.channelCutoff = -1;
         this.updateFilters();
+        this._resetAudioFx();
     }
 
     setAgcSpeed(speed) {
@@ -179,27 +187,46 @@ class DidahDemodulator {
         if (p.cwBandwidth !== undefined) this.cwBandwidth = Math.max(30, Math.min(500, p.cwBandwidth));
         if (p.bfoPitch !== undefined) this.bfoPitch = Math.max(300, Math.min(1200, p.bfoPitch));
         this.updateFilters();
+        this.squelch.setHangForMode(this.modulation);
+        this._resetAudioFx();
     }
 
     /** @param {number} freq - tuned frequency relative to the IQ centre, Hz */
     setOffsetFrequency(freq) {
         this.offsetFreq = freq;
         this.updateFilters();
+        this._resetAudioFx();
     }
 
     setModulation(mod) {
         this.modulation = mod.toLowerCase();
         this.updateFilters();
+        this.squelch.setHangForMode(this.modulation);
+        this._resetAudioFx();
     }
 
     setCwBandwidth(bw) {
         this.cwBandwidth = Math.max(30, Math.min(500, bw));
         this.updateFilters();
+        this._resetAudioFx();
     }
 
     setBfoPitch(pitch) {
         this.bfoPitch = Math.max(300, Math.min(1200, pitch));
         this.updateFilters();
+        this._resetAudioFx();
+    }
+
+    setAutonotchEnabled(on) { this.autoNotch.setEnabled(on); }
+    setAutonotchDepth(pct) { this.autoNotch.setDepth(pct); }
+    setNrEnabled(on) { this.nr.setEnabled(on); }
+    setNrStrength(pct) { this.nr.setStrength(pct); }
+    setSquelchEnabled(on) { this.squelch.setEnabled(on); }
+    setSquelchMarginDb(db) { this.squelch.setMarginDb(db); }
+
+    _resetAudioFx() {
+        this.autoNotch.reset();
+        this.nr.reset();
     }
 
     updateFilters() {
@@ -312,7 +339,12 @@ class DidahDemodulator {
         this.hb2Fill = hb2Fill;
 
         if (this.tapCallback) this.tapCallback(tapI, tapQ, o);
-        return this.agc.process(out.subarray(0, o));
+        if (this.autoNotch.enabled) this.autoNotch.process(out, o);
+        if (this.nr.enabled) this.nr.process(out, o);
+        this.squelch.observe(out, o, this.agc.noiseFloor);
+        this.agc.process(out.subarray(0, o));
+        this.squelch.gate(out, o);
+        return out.subarray(0, o);
     }
 }
 
