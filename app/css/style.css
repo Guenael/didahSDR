@@ -1087,7 +1087,9 @@ kbd {
 }
 
 .source-option.source-option-kiwi,
-.source-option.source-option-soundcard {
+.source-option.source-option-soundcard,
+.source-option.source-option-ic7300,
+.source-option.source-option-rtlsdr {
     display: flex;
     flex-direction: column;
     flex-wrap: nowrap;
@@ -1288,8 +1290,29 @@ kbd {
 }
 
 #sound-device option.is-unsupported,
-#sound-device.has-unsupported {
+#sound-device.has-unsupported,
+#ic7300-device option.is-unsupported,
+#ic7300-device.has-unsupported {
     color: #e57373;
+}
+
+/* Only the selected source shows its detail fields. */
+.source-option .source-sound-fields,
+.source-option .source-kiwi-fields,
+.source-option .source-ic7300-fields,
+.source-option .source-rtlsdr-fields {
+    display: none;
+}
+
+.source-option:has(input[name="iq-source"]:checked) .source-sound-fields,
+.source-option:has(input[name="iq-source"]:checked) .source-kiwi-fields,
+.source-option:has(input[name="iq-source"]:checked) .source-ic7300-fields,
+.source-option:has(input[name="iq-source"]:checked) .source-rtlsdr-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    width: 100%;
 }
 
 /* ---------- CW decoder window ---------- */

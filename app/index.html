@@ -256,18 +256,18 @@
                     <label class="source-option-head">
                         <input type="radio" name="iq-source" value="soundcard">
                         <span class="source-option-text">
-                            <span class="source-option-label">Sound card</span>
-                            <span class="source-option-meta">Local input · centre 0 Hz</span>
+                            <span class="source-option-label">Sound card · IQ for Zero-IF RX</span>
+                            <span class="source-option-meta">Local input · Centre 0 Hz</span>
                         </span>
                     </label>
                     <div class="source-sound-fields">
                         <label class="source-subradio">
                             <input type="radio" name="sound-mode" value="iq" checked>
-                            <span>Stereo 48 / 96 / 192 kHz — IQ (SoftRock)</span>
+                            <span>Stereo 48 / 96 kHz — IQ (SoftRock)</span>
                         </label>
                         <label class="source-subradio is-disabled" title="Mono AF is not wired yet: the waterfall and CW decoder expect complex IQ.">
                             <input type="radio" name="sound-mode" value="mono" disabled>
-                            <span>Mono 48 / 96 / 192 kHz — standard transceiver 4 kHz BW</span>
+                            <span>Mono 48 / 96 kHz — standard transceiver 4 kHz BW</span>
                         </label>
                         <p class="source-todo">TODO: mono AF (not IQ). Waterfall would be audio Hz around 0; the CW model still wants the tone mixed to DC. Hardware TX (COM/PTT or IQ DAC) is a separate path.</p>
                         <div class="source-kiwi-row">
@@ -280,6 +280,91 @@
                             <input type="checkbox" id="sound-iq-swap">
                             Swap I/Q (L/R)
                         </label>
+                    </div>
+                </div>
+                <div class="source-option source-option-ic7300">
+                    <label class="source-option-head">
+                        <input type="radio" name="iq-source" value="ic7300">
+                        <span class="source-option-text">
+                            <span class="source-option-label">IC-7300</span>
+                            <span class="source-option-meta">USB IF · 12 kHz · CI-V</span>
+                        </span>
+                    </label>
+                    <div class="source-ic7300-fields">
+                        <div class="source-kiwi-row">
+                            <select id="ic7300-device" class="source-url-input" aria-label="IC-7300 audio device">
+                                <option value="">Click Enable to list devices…</option>
+                            </select>
+                            <button type="button" id="ic7300-enable-btn" class="source-connect-btn" title="Allow microphone access and list devices">Enable</button>
+                        </div>
+                        <div class="source-kiwi-row">
+                            <select id="ic7300-baud" class="source-url-input" aria-label="CI-V baud rate">
+                                <option value="4800">4800 baud</option>
+                                <option value="9600">9600 baud</option>
+                                <option value="19200" selected>19200 baud</option>
+                                <option value="38400">38400 baud</option>
+                            </select>
+                            <button type="button" id="ic7300-serial-btn" class="source-connect-btn" title="Open the IC-7300 CI-V COM port">Connect</button>
+                        </div>
+                        <div class="source-kiwi-row">
+                            <select id="ic7300-wiring" class="source-url-input" aria-label="PTT and CW lines">
+                                <option value="ptt-rts" selected>PTT=RTS, CW=DTR</option>
+                                <option value="ptt-dtr">PTT=DTR, CW=RTS</option>
+                            </select>
+                        </div>
+                        <p class="source-url-hint">
+                            Limited 12 kHz IF from the IC-7300<br>
+                            Only tested on Chrome (Web Serial requirement)<br>
+                            Check your RTS/DTR/BaudRate IC-7300 configs
+                        </p>
+                    </div>
+                </div>
+                <div class="source-option source-option-rtlsdr">
+                    <label class="source-option-head">
+                        <input type="radio" name="iq-source" value="rtlsdr">
+                        <span class="source-option-text">
+                            <span class="source-option-label">RTL-SDR</span>
+                            <span class="source-option-meta">WebUSB · 192 kHz window · R820T</span>
+                        </span>
+                    </label>
+                    <div class="source-rtlsdr-fields">
+                        <div class="source-kiwi-row">
+                            <button type="button" id="rtlsdr-connect-btn" class="source-connect-btn" disabled
+                                    title="WebUSB needs Chrome or Edge on localhost">Connect</button>
+                        </div>
+                        <div class="source-kiwi-row">
+                            <select id="rtlsdr-mode" class="source-url-input" aria-label="RTL-SDR front end">
+                                <option value="direct-q" selected>Direct sampling Q (HF, V3)</option>
+                                <option value="direct-i">Direct sampling I</option>
+                                <option value="tuner">Tuner (VHF / UHF)</option>
+                            </select>
+                        </div>
+                        <div class="source-kiwi-row">
+                            <select id="rtlsdr-gain" class="source-url-input" aria-label="RTL-SDR gain">
+                                <option value="auto" selected>Gain auto</option>
+                                <option value="0">0 dB</option>
+                                <option value="9">9 dB</option>
+                                <option value="18">18 dB</option>
+                                <option value="27">27 dB</option>
+                                <option value="36">36 dB</option>
+                                <option value="45">45 dB</option>
+                            </select>
+                            <input type="number" id="rtlsdr-ppm" class="source-url-input" value="0" step="1"
+                                   aria-label="Frequency correction, parts per million" title="PPM correction">
+                        </div>
+                        <div class="source-kiwi-row">
+                            <input type="number" id="rtlsdr-upconverter" class="source-url-input" value="0" step="1000"
+                                   aria-label="Upconverter offset in Hz" title="Upconverter offset, Hz. 125000000 for a 125 MHz converter.">
+                            <label class="source-iq-swap">
+                                <input type="checkbox" id="rtlsdr-bias">
+                                Bias tee
+                            </label>
+                        </div>
+                        <p class="source-url-hint">
+                            Chrome or Edge, on localhost. Close other SDR apps.<br>
+                            Linux: unload dvb_usb_rtl28xxu or the stick stays claimed.<br>
+                            The dongle LO sits 384 kHz above the dial. Direct Q is HF on a Blog V3.
+                        </p>
                     </div>
                 </div>
                 <div class="source-option source-option-kiwi">
@@ -395,71 +480,14 @@
                 </section>
 
                 <section class="help-section">
-                    <h3>IQ sources</h3>
-                    <p class="help-text">
-                        Open the Source window to switch between VA2GKA Replay (local 96 kHz recording),
-                        a local sound card (stereo IQ at 48 / 96 / 192 kHz, centre 0 Hz),
-                        and a live KiwiSDR (12 kHz IQ). Paste the receiver web address, for example
-                        <code>http://oh5ae.dyndns.org:8073</code>
-                        or <code>http://f4kiy.ddns.net:8073</code>. On live Kiwi the waterfall is a
-                        12 kHz zoom; tuning past the edges or Shift+wheel / ruler-drag slides the Kiwi DDC.
-                        Sound-card IQ uses the same DSP as Replay; tick <strong>Swap I/Q</strong> if the
-                        spectrum is reversed. Enable asks for 96 kHz, then 48, then 192 (browsers do not
-                        agree on the unconstrained default: Chrome on Linux often reports 44.1 kHz,
-                        Firefox may report the PipeWire graph rate). Chrome also hides Pulse
-                        <em>Monitor of …</em> loopbacks; create a virtual mic if you need to inject a WAV
-                        (see below).
-                    </p>
-                    <p class="help-text">
-                        Linux IQ loopback (PipeWire / Pulse): a null sink plus a remap source so Chrome
-                        lists it as a microphone.
-                    </p>
-                    <pre class="help-pre">pactl load-module module-null-sink sink_name=didah_iq \
-  sink_properties=device.description=didahSDR_IQ \
-  format=s16le rate=96000 channels=2
-pactl load-module module-remap-source source_name=didah_iq_mic \
-  master=didah_iq.monitor \
-  source_properties=device.description=didahSDR_IQ
-ffmpeg -re -stream_loop -1 -i samples/SAMPLE2.wav \
-  -f pulse -device didah_iq didahSDR</pre>
-                    <p class="help-text">
-                        Chrome on Linux is the awkward case: capture is usually locked to
-                        <strong>48 kHz</strong> (96 kHz is a Firefox/PipeWire thing), and it may ignore
-                        the selected device. After Enable, open <code>pavucontrol</code> →
-                        <strong>Recording</strong> and set the Chromium / Chrome stream to
-                        <code>didahSDR_IQ</code>. Or start the browser with that source:
-                    </p>
-                    <pre class="help-pre">PULSE_SOURCE=didah_iq_mic chromium</pre>
-                    <p class="help-text">
-                        The ffmpeg filename after <code>-f pulse</code> is only a stream label;
-                        <code>-device didah_iq</code> is what actually feeds the virtual sink.
-                        Then Enable and pick <code>didahSDR_IQ</code> (not a “Monitor of …” entry).
-                        IQ is not speaker audio: you should see spectrum around 0 Hz and hear CW after
-                        demodulation (Start Audio). Unload with
-                        <code>pactl unload-module module-remap-source</code> and
-                        <code>pactl unload-module module-null-sink</code> (or restart PipeWire).
-                    </p>
-                </section>
-
-                <section class="help-section">
-                    <h3>Settings</h3>
-                    <p class="help-text">
-                        Open the gear button for waterfall levels, WF Speed (1x–8x STFT overlap), CW BFO/BW,
-                        iambic A/B, and USB/LSB low/high (default 200–2700 Hz). QRSS (in the WATERFALL
-                        section) switches the FFT to a Blackman window and averages successive spectra
-                        so slow Morse stands out; WF Speed then sets how long each column integrates.
-                    </p>
-                </section>
-
-                <section class="help-section">
                     <h3>Mouse behaviours</h3>
                     <ul>
-                        <li><strong>Mouse Wheel:</strong> Move the VFO up and down according to the frequency step selected.</li>
+                        <li><strong>Mouse Wheel:</strong> Move the VFO / cursor up and down on the Waterfall according to the frequency step selected.</li>
                         <li><strong>CTRL + Mouse Wheel / CTRL + Left Drag:</strong> Zoom the waterfall, centred on the cursor.</li>
-                        <li><strong>SHIFT + Mouse Wheel / SHIFT + Left Drag:</strong> Pan the waterfall up and down (on live Kiwi this slides the 12 kHz DDC).</li>
-                        <li><strong>CTRL + SHIFT + Wheel / Drag:</strong> Step CW bandwidth, or USB/LSB High when in SSB.</li>
+                        <li><strong>SHIFT + Mouse Wheel / SHIFT + Left Drag:</strong> Pan the waterfall up and down.</li>
+                        <li><strong>CTRL + SHIFT + Wheel / Left Drag:</strong> Step CW bandwidth, or USB/LSB High when in SSB.</li>
                         <li><strong>Left Click on Waterfall:</strong> Move the VFO to the selected frequency (hold and drag to track).</li>
-                        <li><strong>Left Click on the Ruler:</strong> Drag to pan the waterfall up and down.</li>
+                        <li><strong>Drag on the Ruler:</strong> Drag to pan the waterfall up and down.</li>
                     </ul>
                 </section>
 
@@ -480,29 +508,20 @@ ffmpeg -re -stream_loop -1 -i samples/SAMPLE2.wav \
                 </section>
 
                 <section class="help-section">
-                    <h3>Local CW transmit</h3>
-                    <p class="help-text">
-                        CW mode only, local sidetone — nothing is sent to the server yet.
-                        The waterfall freezes while you key (the history from before TX stays on screen)
-                        and RX audio is muted. Sidetone is generated on the audio clock so F8/F9/F4
-                        track the paddles without the receive jitter buffer.
-                        <strong>PTT Off</strong> / <strong>PTT On</strong> arms both the typeahead line
-                        (bright red) and the paddle keys. Typing, or clicking PTT On with text already
-                        in the box, keys a sidetone at the CW BFO. The buffer grows if you type faster
-                        than Morse; when it empties, RX returns after one extra letter-space (no RX
-                        between letters). Click PTT On again to disarm (PTT Off); remaining text stays
-                        in the box. F8/F9 are an iambic paddle (mode A/B in Settings, B default); F4
-                        is a straight key. F8/F9/F4 are ignored while PTT is Off.
-                    </p>
-                </section>
-
-                <section class="help-section">
                     <h3>Analog Mechanical Drum Dial (VFO)</h3>
                     <ul>
                         <li><strong>Hover + Mouse Wheel:</strong> Roll any individual digit drum up or down.</li>
                         <li><strong>Left Click on a digit:</strong> Selects the digit cursor. Use <code>Arrow Up/Down</code> to spin the drum or type digits <code>0-9</code>.</li>
                         <li><strong>Right Click on a digit:</strong> Zeroes out all digits to the right (convenient rounding tool).</li>
                     </ul>
+                </section>
+
+                <section class="help-section">
+                    <h3>Local CW transmit</h3>
+                    <p class="help-text">
+                        CW mode only, by typing text or using F8/F9/F4 as a Iambic paddle or straight key.
+                        Use <strong>PTT On</strong> to arms/stop the transmission.
+                    </p>
                 </section>
 
                 <section class="help-section">
@@ -534,7 +553,11 @@ ffmpeg -re -stream_loop -1 -i samples/SAMPLE2.wav \
     <script src="js/sources.js"></script>
     <script src="js/kiwi.js"></script>
     <script src="js/soundcard.js"></script>
+    <script src="js/civ.js"></script>
+    <script src="js/ic7300_if.js"></script>
+    <script src="js/ic7300.js"></script>
+    <script src="js/rtlsdr.js"></script>
     <script src="js/cw_keyer.js?v=2"></script>
-    <script src="js/app.js?v=2"></script>
+    <script src="js/app.js?v=3"></script>
 </body>
 </html>

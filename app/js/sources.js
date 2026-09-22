@@ -2,8 +2,10 @@
  * didahSDR - IQ source catalog
  *
  * Replay uses the local didah WebSocket (0x03 int16 IQ). Sound card uses the
- * browser microphone API (stereo I/Q at 48/96/192 kHz). Kiwi uses a direct SND
- * connection in mod=iq. Presets are applied when the operator picks a source.
+ * browser microphone API (stereo I/Q at 48/96/192 kHz). The IC-7300 source is the
+ * radio's real 12 kHz USB IF plus CI-V. RTL-SDR is a local WebUSB stick decimated
+ * to 192 kHz. Kiwi uses a direct SND connection in mod=iq. Presets are applied
+ * when the operator picks a source.
  */
 const SOURCES = [
     {
@@ -44,6 +46,28 @@ const SOURCES = [
         iqLowCut: -5980,
         iqHighCut: 5980,
         note: '12 kHz IQ zoom. Paste a KiwiSDR http(s) URL (host and port).'
+    },
+    {
+        id: 'ic7300',
+        label: 'IC-7300',
+        protocol: 'ic7300',
+        minLevel: -90,
+        dynamicRange: 50,
+        fftSize: 2048,
+        startFreq: 11350,
+        startMod: 'cw',
+        note: 'Icom IC-7300 USB IF at 12 kHz. The dial and Shift+drag set the VFO; USB/LSB listen, CW transmits.'
+    },
+    {
+        id: 'rtlsdr',
+        label: 'RTL-SDR',
+        protocol: 'rtlsdr',
+        minLevel: -90,
+        dynamicRange: 50,
+        fftSize: 2048,
+        startFreq: 14048000,
+        startMod: 'cw',
+        note: 'RTL2832U over WebUSB, decimated to 192 kHz. Direct sampling Q is the HF path on a Blog V3.'
     }
 ];
 

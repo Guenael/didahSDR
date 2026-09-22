@@ -44,6 +44,7 @@ class HorizontalWaterfall {
         this.minZoom = 1.0;
         this.maxZoom = 24.0;
         this.panOffset = 0.0; // in Hz from center
+        this.viewLock = false; // IC-7300: block click-tune and zoom; Shift-pan still tunes the radio
 
         // Interaction state
         this.dragMode = null;         // 'tune' | 'zoom' | 'pan' | 'bw'
@@ -641,20 +642,24 @@ class HorizontalWaterfall {
     }
 
     zoomIn() {
+        if (this.viewLock) return;
         this.setZoom(this.zoom * 1.5);
     }
 
     zoomOut() {
+        if (this.viewLock) return;
         this.setZoom(this.zoom / 1.5);
     }
 
     zoomMin() {
+        if (this.viewLock) return;
         this.zoom = 1.0;
         this.panOffset = 0.0;
         this.refreshChrome();
     }
 
     zoomMax() {
+        if (this.viewLock) return;
         this.zoom = this.maxZoom;
         this.panOffset = this.tunedFreq - this.centerFreq;
         this.clampPan();
@@ -680,6 +685,7 @@ class HorizontalWaterfall {
             this.onPanCallback(deltaHz);
             return;
         }
+        if (this.viewLock) return;
         this.panOffset += deltaHz;
         this.clampPan();
         this.refreshChrome();
@@ -690,6 +696,7 @@ class HorizontalWaterfall {
      * Factor > 1 zooms in (same convention as Ctrl+wheel: 1.25 / 0.8).
      */
     applyZoomAt(mouseY, cursorFreq, factor) {
+        if (this.viewLock) return;
         const oldZoom = this.zoom;
         const newZoom = Math.max(this.minZoom, Math.min(this.maxZoom, oldZoom * factor));
         if (newZoom === oldZoom || !this.wfHeight) return;
@@ -741,7 +748,9 @@ class HorizontalWaterfall {
         const beginDrag = (e, onRuler) => {
             if (e.button !== 0) return;
             e.preventDefault();
-            this.dragMode = dragModeFromEvent(e, onRuler);
+            const mode = dragModeFromEvent(e, onRuler);
+            if (this.viewLock && mode !== 'bw' && mode !== 'pan') return;
+            this.dragMode = mode;
             this.dragLastY = e.clientY;
             this.dragAnchorY = Math.max(0, Math.min(this.wfHeight, canvasY(e)));
             this.dragAnchorFreq = this.yToFreq(this.dragAnchorY);
@@ -790,16 +799,18 @@ class HorizontalWaterfall {
             if (e.ctrlKey && e.shiftKey) {
                 const direction = e.deltaY < 0 ? 1 : -1;
                 this.notifyBandwidth(direction);
+            } else if (e.shiftKey && !e.ctrlKey) {
+                let dy = e.deltaY;
+                if (e.deltaMode === 1) dy *= 16;
+                else if (e.deltaMode === 2) dy *= this.wfHeight;
+                this.panByPixels(dy);
+            } else if (this.viewLock) {
+                return;
             } else if (e.ctrlKey) {
                 const mouseY = Math.max(0, Math.min(this.wfHeight, canvasY(e)));
                 const cursorFreq = this.yToFreq(mouseY);
                 const factor = e.deltaY < 0 ? 1.25 : 0.8;
                 this.applyZoomAt(mouseY, cursorFreq, factor);
-            } else if (e.shiftKey) {
-                let dy = e.deltaY;
-                if (e.deltaMode === 1) dy *= 16;
-                else if (e.deltaMode === 2) dy *= this.wfHeight;
-                this.panByPixels(dy);
             } else {
                 const direction = e.deltaY < 0 ? 1 : -1;
                 const delta = direction * this.stepSize;

@@ -18,6 +18,7 @@ class SDRValueDial {
         this.unit = options.unit || 'Hz';
         this.activeCursorIndex = -1; // -1 means none selected
         this.onChange = options.onChange || null;
+        this.locked = false;
 
         this.drumElements = [];
         this.buildDOM();
@@ -121,6 +122,7 @@ class SDRValueDial {
     }
 
     stepDigit(digitIndex, direction) {
+        if (this.locked) return;
         const drum = this.drumElements[digitIndex];
         if (!drum) return;
 
@@ -130,6 +132,7 @@ class SDRValueDial {
     }
 
     zeroDigitsRight(digitIndex) {
+        if (this.locked) return;
         const drum = this.drumElements[digitIndex];
         if (!drum) return;
 
@@ -183,6 +186,11 @@ class SDRValueDial {
             }
 
             const cur = this.activeCursorIndex;
+
+            if (this.locked && (e.key === 'ArrowUp' || e.key === 'ArrowDown' || (e.key >= '0' && e.key <= '9'))) {
+                e.preventDefault();
+                return;
+            }
 
             if (e.key === 'ArrowUp') {
                 e.preventDefault();
