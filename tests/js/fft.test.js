@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 require('./load.js');
 
 test('full-scale complex tone peaks in the expected fftshifted bin at 0 dBFS', () => {
-    const N = 2048, rate = 96000, f = 10000;
+    const N = 2048, rate = 96000, f = 9375; // exactly bin 200, so the check is coherent gain
     const fft = new DidahFFT(N);
     const re = new Float32Array(N), im = new Float32Array(N);
     for (let n = 0; n < N; n++) { const ph = (2 * Math.PI * f * n) / rate; re[n] = Math.cos(ph); im[n] = Math.sin(ph); }
@@ -34,8 +34,14 @@ test('setSize reallocates tables and window sum', () => {
     assert.ok(fft.windowSum > 0);
 });
 
+test('default window is 4-term Blackman-Harris with ENBW near 2 bins', () => {
+    const fft = new DidahFFT(2048);
+    assert.equal(fft.windowName, 'bh4');
+    assert.ok(fft.enbw > 1.8 && fft.enbw < 2.2, `ENBW ${fft.enbw}`);
+});
+
 test('blackman window is coherent-gain normalised; mag2Buffer matches dB', () => {
-    const N = 2048, rate = 96000, f = 10000;
+    const N = 2048, rate = 96000, f = 9375; // exactly bin 200, so the check is coherent gain
     const fft = new DidahFFT(N);
     fft.initWindow('blackman');
     assert.equal(fft.windowName, 'blackman');

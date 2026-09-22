@@ -48,6 +48,8 @@ class CWDecoder {
         this.els = els;
         this.worker = null;
         this.active = false;
+        this.modelState = 'off';
+        this.modelDetail = '';
         this.rate = 0;
         this.text = '';
         this.maxChars = 4000;
@@ -91,7 +93,8 @@ class CWDecoder {
                 modelUrl: new URL('models/didahcw.onnx', document.baseURI).href,
                 metaUrl: new URL('models/didahcw.onnx.json', document.baseURI).href,
             });
-            this._status('loading');
+            this.modelState = 'loading';
+            this.modelDetail = '';
         } else if (rate !== this.rate) {
             this.worker.postMessage({ type: 'rate', rate });
         }
@@ -99,6 +102,9 @@ class CWDecoder {
         this._setChunk(rate);
         this.active = true;
         this.demod.tapCallback = this.onTap;
+        // The worker reports ready only once. A later start (CW again, or the window reopened)
+        // must repaint that state; stop() has left the badge on STANDBY.
+        this._status(this.modelState, this.modelDetail);
     }
 
     stop() {
@@ -194,6 +200,8 @@ class CWDecoder {
                 this._render();
                 break;
             case 'status':
+                this.modelState = m.state;
+                this.modelDetail = m.detail || '';
                 this._status(this.active || m.state === 'error' ? m.state : 'standby', m.detail);
                 break;
         }

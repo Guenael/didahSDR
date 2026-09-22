@@ -213,6 +213,7 @@ class DidahDemodulator {
 
         this.audioOut = new Float32Array(0);
         this.tapCallback = null;
+        this.qrssPush = null;
         this.tapI = new Float32Array(0);
         this.tapQ = new Float32Array(0);
 
@@ -410,6 +411,7 @@ class DidahDemodulator {
             }
             if (!alive) continue;
 
+            if (this.qrssPush) this.qrssPush(si, sq);
             channel.push(si, sq);
             channel.compute();
             const ci = channel.outI;

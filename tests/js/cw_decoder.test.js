@@ -33,6 +33,22 @@ test('usable rates snap to multiples of 800 within 1 %', () => {
     assert.deepEqual(CWDecoder.ratePlan(1000), { rate: 0, resample: false });
 });
 
+test('leaving CW shows STANDBY and returning restores the worker state', () => {
+    const status = { textContent: '', className: '', title: '' };
+    const demod = { tapCallback: null };
+    const dec = new CWDecoder(demod, { output: null, status });
+    dec.worker = { postMessage() {} };
+    dec._onMessage({ type: 'status', state: 'ready', detail: '1 thread(s)' });
+    assert.equal(status.textContent, 'STANDBY');
+    dec.start(12000);
+    assert.equal(status.textContent, 'DECODING');
+    assert.equal(status.title, '1 thread(s)');
+    dec.stop();
+    assert.equal(status.textContent, 'STANDBY');
+    dec.start(12000);
+    assert.equal(status.textContent, 'DECODING');
+});
+
 test('greedy CTC collapses repeats, drops blanks, carries prev across chunks', () => {
     const chars = ['A', 'B', ' '], blank = 3, C = 4;
     const seq = [0, 0, 3, 0, 1, 1];

@@ -148,7 +148,7 @@
                         </select>
                     </div>
                     <div class="control-group">
-                        <button id="qrss-toggle" class="toggle-btn" title="Slow waterfall: Blackman window and averaged FFT bins. WF Speed sets integration time.">QRSS: OFF</button>
+                        <button id="qrss-toggle" class="toggle-btn" title="Narrow waterfall around the dial, bins under 1 Hz. WF Speed sets the bin width and how fast the trace scrolls.">QRSS: OFF</button>
                     </div>
                 </div>
 
@@ -426,7 +426,7 @@
                         <select id="theme-select" class="select-input"></select>
                     </div>
                     <div class="control-group">
-                        <button id="cw-filter-toggle" class="toggle-btn active" title="Toggle CW Adaptive IIR Noise Squelch & Sharpening">CW Filter: ON</button>
+                        <button id="cw-filter-toggle" class="toggle-btn active" title="Toggle CW Adaptive IIR Noise Squelch & Sharpening. Off uses a Blackman-Harris window.">CW Filter: ON</button>
                     </div>
                 </div>
 
@@ -542,6 +542,7 @@
     <script src="js/agc.js"></script>
     <script src="js/audio_fx.js"></script>
     <script src="js/demodulator.js"></script>
+    <script src="js/qrss.js"></script>
     <script src="js/floating_window.js"></script>
     <script src="js/value_dial.js"></script>
     <script src="js/waterfall.js"></script>

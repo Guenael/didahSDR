@@ -14,8 +14,8 @@
  * - Instantaneous numerical readout, peak readout, and mode/bandwidth badge
  */
 
-const SNR_DB_TO_LN = Math.LN10 / 10;
-const SNR_LN_TO_DB = 10 / Math.LN10;
+/** Exponential power (complex Gaussian) has median = ln(2) × mean, 1.59 dB below the mean. */
+const SNR_MEDIAN_BIAS_DB = 10 * Math.log10(1 / Math.LN2);
 
 class DidahSMeter {
     constructor() {
@@ -34,6 +34,7 @@ class DidahSMeter {
         this.peakHoldUntil = 0;
         this.lastUpdateTime = 0;
         this.lastRenderTime = 0;
+        this.noiseScratch = new Float32Array(256);
     }
 
     init() {
@@ -105,15 +106,15 @@ class DidahSMeter {
     }
 
     /**
-     * Mean-power (S+N)/N in dB for the tuned passband vs neighbouring bins.
-     * Returns a signed value (white noise ~0); null if the windows are unusable.
-     * No allocations — safe on the FFT path.
+     * (S+N)/N in dB from linear mag². Noise is the median of bins outside a guard
+     * of ceil(ENBW)+2, lifted by the exponential-median bias so Gaussian noise reads 0 dB.
      */
-    computeSnrDb(specDb, sampleRate, centerFreq, tunedFreq, modulation, bandwidth) {
-        const nfft = specDb.length;
+    computeSnrDb(mag2, sampleRate, centerFreq, tunedFreq, modulation, bandwidth, enbw) {
+        const nfft = mag2.length;
         const binWidth = sampleRate / nfft;
         const offsetHz = tunedFreq - centerFreq;
         const k0 = Math.round((offsetHz / sampleRate) * nfft + nfft / 2);
+        const guard = Math.ceil(enbw == null ? 2 : enbw) + 2;
 
         let kStart, kEnd;
         const mod = (modulation || 'cw').toLowerCase();
@@ -137,34 +138,38 @@ class DidahSMeter {
         let passSum = 0.0;
         let passCount = 0;
         for (let k = kStart; k <= kEnd; k++) {
-            passSum += Math.exp(specDb[k] * SNR_DB_TO_LN);
+            passSum += mag2[k];
             passCount++;
         }
 
         const noiseSpan = Math.max(16, Math.round(1500 / binWidth));
-        let noiseSum = 0.0;
+        const leftEnd = kStart - guard;
+        const leftStart = Math.max(0, leftEnd - noiseSpan);
+        const rightStart = kEnd + guard;
+        const rightEnd = Math.min(nfft - 1, rightStart + noiseSpan);
         let noiseCount = 0;
-        const leftStart = Math.max(0, kStart - noiseSpan);
-        for (let k = leftStart; k < kStart; k++) {
-            noiseSum += Math.exp(specDb[k] * SNR_DB_TO_LN);
-            noiseCount++;
-        }
-        const rightEnd = Math.min(nfft - 1, kEnd + noiseSpan);
-        for (let k = kEnd + 1; k <= rightEnd; k++) {
-            noiseSum += Math.exp(specDb[k] * SNR_DB_TO_LN);
-            noiseCount++;
-        }
+        if (this.noiseScratch.length < nfft) this.noiseScratch = new Float32Array(nfft);
+        const scratch = this.noiseScratch;
+        for (let k = leftStart; k < leftEnd; k++) scratch[noiseCount++] = mag2[k];
+        for (let k = rightStart + 1; k <= rightEnd; k++) scratch[noiseCount++] = mag2[k];
 
-        if (passCount < 1 || noiseCount < 8 || !(noiseSum > 0) || !(passSum > 0)) return null;
-        return SNR_LN_TO_DB * Math.log((passSum / passCount) / (noiseSum / noiseCount));
+        if (passCount < 1 || noiseCount < 8 || !(passSum > 0)) return null;
+        scratch.subarray(0, noiseCount).sort();
+        const mid = (noiseCount - 1) >> 1;
+        const median = noiseCount % 2 === 1
+            ? scratch[mid]
+            : 0.5 * (scratch[mid] + scratch[mid + 1]);
+        if (!(median > 0)) return null;
+        return 10 * Math.log10((passSum / passCount) / median) - SNR_MEDIAN_BIAS_DB;
     }
 
     /**
      * Compute instantaneous SNR and update the meter ballistics / DOM.
+     * `mag2` is the linear fftshifted power buffer.
      */
-    updateFromSpectrum(specDb, sampleRate, centerFreq, tunedFreq, modulation, bandwidth) {
+    updateFromSpectrum(mag2, sampleRate, centerFreq, tunedFreq, modulation, bandwidth, enbw) {
         if (!this.visible || !this.container) return;
-        const rawSnrDb = this.computeSnrDb(specDb, sampleRate, centerFreq, tunedFreq, modulation, bandwidth);
+        const rawSnrDb = this.computeSnrDb(mag2, sampleRate, centerFreq, tunedFreq, modulation, bandwidth, enbw);
         if (rawSnrDb == null || !Number.isFinite(rawSnrDb)) return;
         this.applyBallistics(rawSnrDb);
         this.render();

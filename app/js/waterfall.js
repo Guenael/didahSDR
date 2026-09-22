@@ -71,12 +71,16 @@ class HorizontalWaterfall {
         this.colormapTexture = null;
         this.quadBuffer = null;
 
-        this.texWidth = 2048;
-        this.texHeight = 2048;
-        this.headX = 0;
+        this.freqLen = 2048;     // texture width: one spectrum is a contiguous row
+        this.timeRows = 2048;    // texture height: time ring
+        this.headRow = 0;
         this.totalSlicesAdded = 0;
         this.scrollPos = 0.0;
-        this.sliceBytes = null;
+        this.stage = null;
+        this.pending = 0;
+        this.maxPending = 32;
+        this.aPos = -1;
+        this.contextLost = false;
 
         // FPS & timing
         this.running = true;
@@ -168,47 +172,53 @@ class HorizontalWaterfall {
 
             uniform float u_scrollPos;
             uniform float u_visibleCols;
-            uniform float u_texWidth;
+            uniform float u_timeRows;
+            uniform float u_freqLen;
 
-            uniform float u_texYBottom;
-            uniform float u_texYTop;
+            uniform float u_freqBottom;
+            uniform float u_freqTop;
             uniform float u_pbMin;
             uniform float u_pbMax;
-            uniform float u_edgeY;
+            uniform float u_edgeX;
+            uniform float u_viewH;
 
             uniform float u_minLevel;
             uniform float u_dbFloor;
             uniform float u_dynRange;
 
             void main() {
-                // v_uv.y: 0 = bottom (low frequency), 1 = top (high frequency)
-                float texY = mix(u_texYBottom, u_texYTop, v_uv.y);
-
-                if (texY < -0.002 || texY > 1.002) {
+                // Frequency is the texture row (X). Time is the texture column ring (Y).
+                float texX = mix(u_freqBottom, u_freqTop, v_uv.y);
+                if (texX < -0.002 || texX > 1.002) {
                     gl_FragColor = vec4(0.04, 0.04, 0.06, 1.0);
                     return;
                 }
 
-                // v_uv.x: 0 = left (oldest), 1 = right (newest)
-                float col = (u_scrollPos - 0.5) - (1.0 - v_uv.x) * u_visibleCols;
-                float texX = fract(fract(col / u_texWidth) + 1.0);
+                float row = (u_scrollPos - 0.5) - (1.0 - v_uv.x) * u_visibleCols;
+                float texY = fract(fract(row / u_timeRows) + 1.0);
+                float texYc = clamp(texY, 0.0005, 0.9995);
 
-                // Sample normalized raw byte [0..1]
-                float rawNorm = texture2D(u_data, vec2(texX, clamp(texY, 0.0005, 0.9995))).r;
+                // Max over the texels that fall in this pixel, so a one-bin carrier
+                // survives when the view is zoomed out. 16 fetches cover the pixel;
+                // extra taps repeat the last texel.
+                float bpp = abs(u_freqTop - u_freqBottom) * u_freqLen / max(1.0, u_viewH);
+                float taps = min(16.0, max(1.0, ceil(bpp)));
+                float texel = (u_freqTop - u_freqBottom) / max(1.0, u_viewH) / taps;
+                float x0 = texX - texel * (taps - 1.0) * 0.5;
+                float rawNorm = 0.0;
+                for (int i = 0; i < 16; i++) {
+                    float fi = min(float(i), taps - 1.0);
+                    float x = clamp(x0 + texel * fi, 0.0005, 0.9995);
+                    rawNorm = max(rawNorm, texture2D(u_data, vec2(x, texYc)).r);
+                }
 
-                // Reconstruct dB level in [u_dbFloor, 0.0]
                 float db = u_dbFloor * (1.0 - rawNorm);
-
-                // Map to display level [0..1]
                 float norm = clamp((db - u_minLevel) / u_dynRange, 0.0, 1.0);
 
-                // Anti-aliased passband transition across edges to eliminate staircase/judder
                 vec4 colNormal = texture2D(u_colormap, vec2(norm, 0.25));
                 vec4 colPassband = texture2D(u_colormap, vec2(norm, 0.75));
-
-                float inPass = smoothstep(u_pbMin - u_edgeY, u_pbMin, texY) * 
-                               (1.0 - smoothstep(u_pbMax, u_pbMax + u_edgeY, texY));
-
+                float inPass = smoothstep(u_pbMin - u_edgeX, u_pbMin, texX)
+                    * (1.0 - smoothstep(u_pbMax, u_pbMax + u_edgeX, texX));
                 gl_FragColor = mix(colNormal, colPassband, inPass);
             }
         `;
@@ -232,12 +242,14 @@ class HorizontalWaterfall {
             u_colormap: gl.getUniformLocation(this.program, 'u_colormap'),
             u_scrollPos: gl.getUniformLocation(this.program, 'u_scrollPos'),
             u_visibleCols: gl.getUniformLocation(this.program, 'u_visibleCols'),
-            u_texWidth: gl.getUniformLocation(this.program, 'u_texWidth'),
-            u_texYBottom: gl.getUniformLocation(this.program, 'u_texYBottom'),
-            u_texYTop: gl.getUniformLocation(this.program, 'u_texYTop'),
+            u_timeRows: gl.getUniformLocation(this.program, 'u_timeRows'),
+            u_freqLen: gl.getUniformLocation(this.program, 'u_freqLen'),
+            u_freqBottom: gl.getUniformLocation(this.program, 'u_freqBottom'),
+            u_freqTop: gl.getUniformLocation(this.program, 'u_freqTop'),
             u_pbMin: gl.getUniformLocation(this.program, 'u_pbMin'),
             u_pbMax: gl.getUniformLocation(this.program, 'u_pbMax'),
-            u_edgeY: gl.getUniformLocation(this.program, 'u_edgeY'),
+            u_edgeX: gl.getUniformLocation(this.program, 'u_edgeX'),
+            u_viewH: gl.getUniformLocation(this.program, 'u_viewH'),
             u_minLevel: gl.getUniformLocation(this.program, 'u_minLevel'),
             u_dbFloor: gl.getUniformLocation(this.program, 'u_dbFloor'),
             u_dynRange: gl.getUniformLocation(this.program, 'u_dynRange')
@@ -253,15 +265,18 @@ class HorizontalWaterfall {
              1.0,  1.0
         ]);
         gl.bufferData(gl.ARRAY_BUFFER, quadVertices, gl.STATIC_DRAW);
+        this.aPos = gl.getAttribLocation(this.program, 'a_pos');
 
-        // Data texture (ring buffer)
+        // Data texture: frequency along X (one slice = one row), time along Y.
         this.dataTexture = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, this.dataTexture);
         gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-        const blank = new Uint8Array(this.texWidth * this.texHeight);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, this.texWidth, this.texHeight, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, blank);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texImage2D(
+            gl.TEXTURE_2D, 0, gl.LUMINANCE, this.freqLen, this.timeRows, 0,
+            gl.LUMINANCE, gl.UNSIGNED_BYTE, null
+        );
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
@@ -305,17 +320,19 @@ class HorizontalWaterfall {
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 2, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgbaBytes);
     }
 
-    resizeDataTexture(newWidth, newHeight) {
-        if (!this.gl || !this.dataTexture) return;
+    resizeDataTexture(freqLen, timeRows) {
+        if (!this.gl || !this.dataTexture || this.contextLost) return;
         const gl = this.gl;
-        this.texWidth = newWidth || this.texWidth;
-        this.texHeight = newHeight || this.texHeight;
-
+        this.freqLen = freqLen || this.freqLen;
+        this.timeRows = timeRows || this.timeRows;
         gl.bindTexture(gl.TEXTURE_2D, this.dataTexture);
         gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-        const blank = new Uint8Array(this.texWidth * this.texHeight);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, this.texWidth, this.texHeight, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, blank);
-        this.headX = 0;
+        gl.texImage2D(
+            gl.TEXTURE_2D, 0, gl.LUMINANCE, this.freqLen, this.timeRows, 0,
+            gl.LUMINANCE, gl.UNSIGNED_BYTE, null
+        );
+        this.headRow = 0;
+        this.pending = 0;
         this.scrollPos = 0.0;
         this.totalSlicesAdded = 0;
         this.dirty = true;
@@ -329,6 +346,7 @@ class HorizontalWaterfall {
             if (!this.lastRenderTime) this.lastRenderTime = timestamp;
             const dt = Math.min(0.1, (timestamp - this.lastRenderTime) / 1000.0);
             this.lastRenderTime = timestamp;
+            this.flushSlices();
 
             // Fluid sub-pixel scroll tracking
             const diff = this.totalSlicesAdded - this.scrollPos;
@@ -361,16 +379,15 @@ class HorizontalWaterfall {
 
     renderWebGL() {
         const gl = this.gl;
-        if (!gl || !this.program || !this.uniforms) return;
+        if (!gl || !this.program || !this.uniforms || this.contextLost) return;
 
         gl.viewport(0, 0, this.wfWidth, this.wfHeight);
         gl.useProgram(this.program);
 
         // Bind attributes
-        const aPosLocation = gl.getAttribLocation(this.program, 'a_pos');
         gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
-        gl.enableVertexAttribArray(aPosLocation);
-        gl.vertexAttribPointer(aPosLocation, 2, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(this.aPos);
+        gl.vertexAttribPointer(this.aPos, 2, gl.FLOAT, false, 0, 0);
 
         // Bind textures
         gl.activeTexture(gl.TEXTURE0);
@@ -382,18 +399,20 @@ class HorizontalWaterfall {
         gl.uniform1i(this.uniforms.u_colormap, 1);
 
         // Uniforms
-        const scrollPos = this.scrollPos % this.texWidth;
+        const scrollPos = this.scrollPos % this.timeRows;
         gl.uniform1f(this.uniforms.u_scrollPos, scrollPos);
         gl.uniform1f(this.uniforms.u_visibleCols, this.wfWidth);
-        gl.uniform1f(this.uniforms.u_texWidth, this.texWidth);
+        gl.uniform1f(this.uniforms.u_timeRows, this.timeRows);
+        gl.uniform1f(this.uniforms.u_freqLen, this.freqLen);
+        gl.uniform1f(this.uniforms.u_viewH, this.wfHeight);
 
         const { start, end } = this.getVisibleFreqRange();
         const fullMinFreq = this.centerFreq - this.sampleRate / 2;
-        const texYBottom = (start - fullMinFreq) / this.sampleRate;
-        const texYTop = (end - fullMinFreq) / this.sampleRate;
+        const freqBottom = (start - fullMinFreq) / this.sampleRate;
+        const freqTop = (end - fullMinFreq) / this.sampleRate;
 
-        gl.uniform1f(this.uniforms.u_texYBottom, texYBottom);
-        gl.uniform1f(this.uniforms.u_texYTop, texYTop);
+        gl.uniform1f(this.uniforms.u_freqBottom, freqBottom);
+        gl.uniform1f(this.uniforms.u_freqTop, freqTop);
 
         let pbMin = 2.0, pbMax = 2.0;
         if (this.showPassband) {
@@ -404,8 +423,8 @@ class HorizontalWaterfall {
         gl.uniform1f(this.uniforms.u_pbMin, pbMin);
         gl.uniform1f(this.uniforms.u_pbMax, pbMax);
 
-        const edgeY = (texYTop - texYBottom) / Math.max(1.0, this.wfHeight) * 1.5;
-        gl.uniform1f(this.uniforms.u_edgeY, edgeY);
+        const edgeX = (freqTop - freqBottom) / Math.max(1.0, this.wfHeight) * 1.5;
+        gl.uniform1f(this.uniforms.u_edgeX, edgeX);
 
         gl.uniform1f(this.uniforms.u_minLevel, this.minLevel);
         gl.uniform1f(this.uniforms.u_dbFloor, WATERFALL_DB_FLOOR);
@@ -426,9 +445,9 @@ class HorizontalWaterfall {
             this.wfCanvas.width = this.wfWidth;
             this.wfCanvas.height = this.wfHeight;
 
-            if (this.wfWidth > this.texWidth) {
-                const newTexW = Math.max(2048, Math.pow(2, Math.ceil(Math.log2(this.wfWidth + 256))));
-                this.resizeDataTexture(newTexW, this.texHeight);
+            if (this.wfWidth > this.timeRows) {
+                const rows = Math.max(2048, Math.pow(2, Math.ceil(Math.log2(this.wfWidth + 256))));
+                this.resizeDataTexture(this.freqLen, rows);
             }
         }
 
@@ -534,29 +553,50 @@ class HorizontalWaterfall {
         if (!rawFft || rawFft.length === 0 || !this.gl || !this.dataTexture) return;
         const fftLen = rawFft.length;
 
-        if (!this.sliceBytes || this.sliceBytes.length !== fftLen || this.texHeight !== fftLen) {
-            this.sliceBytes = new Uint8Array(fftLen);
-            this.resizeDataTexture(this.texWidth, fftLen);
+        if (!this.stage || this.freqLen !== fftLen) {
+            this.stage = new Uint8Array(this.maxPending * fftLen);
+            this.pending = 0;
+            const rows = Math.max(this.timeRows, 2048);
+            this.resizeDataTexture(fftLen, rows);
         }
+        if (this.pending >= this.maxPending) this.flushSlices();
 
-        // Quantize dB to bytes over [WATERFALL_DB_FLOOR, 0]; the shader maps bytes back to dB
-        const bytes = this.sliceBytes;
+        const row = this.pending * fftLen;
+        const bytes = this.stage;
         const floor = WATERFALL_DB_FLOOR;
         const invSpan = 255.0 / -floor;
         for (let i = 0; i < fftLen; i++) {
             let b = Math.floor((rawFft[i] - floor) * invSpan);
             if (b < 0) b = 0;
             else if (b > 255) b = 255;
-            bytes[i] = b;
+            bytes[row + i] = b;
         }
+        this.pending++;
+        this.dirty = true;
+    }
 
+    /** Upload every staged row in one or two texSubImage2D calls (the ring may wrap). */
+    flushSlices() {
+        if (!this.pending || !this.gl || !this.dataTexture || this.contextLost) return;
         const gl = this.gl;
+        const w = this.freqLen;
+        const rows = this.timeRows;
+        const n = this.pending;
+        const stage = this.stage;
         gl.bindTexture(gl.TEXTURE_2D, this.dataTexture);
         gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, this.headX, 0, 1, fftLen, gl.LUMINANCE, gl.UNSIGNED_BYTE, bytes);
-
-        this.headX = this.headX === this.texWidth - 1 ? 0 : this.headX + 1;
-        this.totalSlicesAdded++;
+        const first = this.headRow;
+        const untilEnd = rows - first;
+        if (n <= untilEnd) {
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, first, w, n, gl.LUMINANCE, gl.UNSIGNED_BYTE, stage.subarray(0, n * w));
+        } else {
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, first, w, untilEnd, gl.LUMINANCE, gl.UNSIGNED_BYTE, stage.subarray(0, untilEnd * w));
+            const rest = n - untilEnd;
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, rest, gl.LUMINANCE, gl.UNSIGNED_BYTE, stage.subarray(untilEnd * w, n * w));
+        }
+        this.headRow = (first + n) % rows;
+        this.totalSlicesAdded += n;
+        this.pending = 0;
         this.dirty = true;
     }
 
@@ -576,7 +616,7 @@ class HorizontalWaterfall {
 
         const targetTickCount = Math.max(4, Math.floor(h / 42));
         const rawStep = span / targetTickCount;
-        const niceSteps = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000];
+        const niceSteps = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000];
         let step = niceSteps[niceSteps.length - 1];
         for (let i = 0; i < niceSteps.length; i++) {
             if (niceSteps[i] >= rawStep) {
@@ -604,7 +644,8 @@ class HorizontalWaterfall {
             ctx.stroke();
 
             ctx.fillStyle = isMajor ? '#abb2bf' : '#5c6370';
-            const khz = (freq / 1000).toFixed(step < 1000 ? 1 : 0);
+            const digits = step < 10 ? 3 : step < 100 ? 2 : step < 1000 ? 1 : 0;
+            const khz = (freq / 1000).toFixed(digits);
             ctx.fillText(khz, w - 8, y);
         }
 
@@ -713,12 +754,18 @@ class HorizontalWaterfall {
     }
 
     attachEvents() {
-        window.addEventListener('resize', () => this.resize());
-        // The container can change size without a window resize (bottom panel reflow, font load);
-        // keep the canvas buffers in sync so screen pixels and buffer pixels stay 1:1.
         if (typeof ResizeObserver !== 'undefined') {
             new ResizeObserver(() => this.resize()).observe(this.container);
         }
+        this.wfCanvas.addEventListener('webglcontextlost', (e) => {
+            e.preventDefault();
+            this.contextLost = true;
+        });
+        this.wfCanvas.addEventListener('webglcontextrestored', () => {
+            this.contextLost = false;
+            this.initWebGL();
+            this.dirty = true;
+        });
 
         // Mouse Y in CSS pixels -> canvas buffer pixels. The two differ whenever the container has
         // changed height without a resize() (fonts loading, bottom panel reflow); dividing CSS pixels

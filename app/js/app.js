@@ -53,16 +53,19 @@ document.addEventListener('DOMContentLoaded', () => {
     let ic7300 = null;
     let rtl = null;
 
-    // 1. Initialize CW Adaptive Filter (from my_adaptive_iir_filter.py)
+    // CW waterfall filter: noise-floor IIR plus the click-sharpening kernel.
     const cwFilter = new CWAdaptiveFilter(state.fftSize);
     cwFilter.enabled = state.filterEnabled;
     cwFilter.setKernel(state.filterKernel);
 
     // 2. Initialize Fast Client-Side Radix-2 FFT Engine
     const clientFft = new DidahFFT(state.fftSize);
+    clientFft.initWindow(state.filterEnabled ? 'flattop' : 'bh4');
 
     // 3. Initialize Client-Side Demodulator with AGC
     const demodulator = new DidahDemodulator(state.sampleRate, 48000);
+    const qrss = new QrssSpectrum();
+    qrss.setInputRate(demodulator.audioRate);
 
     // Neural CW decoder (worker + ONNX). Runs only while its window is open and the mode is CW.
     const cwDecoder = new CWDecoder(demodulator, {
@@ -137,20 +140,28 @@ document.addEventListener('DOMContentLoaded', () => {
     let ringHead = 0;
     let samplesAvailable = 0;
 
-    let blockReal = new Float32Array(state.fftSize);
-    let blockImag = new Float32Array(state.fftSize);
-    let qrssAcc = new Float32Array(state.fftSize);
-    let qrssCount = 0;
-
-    function resetQrssAcc() {
-        qrssAcc.fill(0);
-        qrssCount = 0;
+    function qrssPlan() {
+        const speed = Math.max(1, Math.min(8, state.speedMultiplier | 0));
+        const sizes = [8192, 8192, 4096, 4096, 2048, 2048, 1024, 1024];
+        const out = qrss.outRate > 0 ? qrss.outRate : 375;
+        return {
+            fftSize: sizes[speed - 1],
+            average: 9 - speed,
+            hop: Math.max(1, Math.round(out / speed))
+        };
     }
 
-    /** QRSS: slower columns via Welch-style power averaging. Speed 1x integrates longest. */
-    function qrssAvgCount() {
-        const speed = Math.max(1, Math.min(8, state.speedMultiplier));
-        return Math.max(4, 16 * (9 - speed));
+    let qrssPlanSpeed = -1;
+    function applyQrssPlan() {
+        const plan = qrssPlan();
+        if (qrss.fftSize !== plan.fftSize) qrss.setFftSize(plan.fftSize);
+        if (qrss.avgTarget !== plan.average) qrss.setAverage(plan.average);
+        if (qrss.hop !== plan.hop) qrss.setHop(plan.hop);
+        qrssPlanSpeed = state.speedMultiplier;
+    }
+
+    function resetQrssAcc() {
+        qrss.reset();
     }
 
     // 7b. Initialize SNR-Meter (0 to 40+ dB above local noise floor)
@@ -313,52 +324,47 @@ document.addEventListener('DOMContentLoaded', () => {
     const MAX_SPECTRUM_COLS = 200;
 
     function spectrumHopSize() {
-        const speed = state.qrssEnabled ? 2 : Math.max(1, state.speedMultiplier);
+        const speed = Math.max(1, state.speedMultiplier);
         const bySpeed = Math.floor(state.fftSize / speed);
         const byCap = Math.ceil(state.sampleRate / MAX_SPECTRUM_COLS);
         return Math.max(1, bySpeed, byCap);
     }
 
-    /** Draw waterfall slices until the ring is caught up. */
+    function paintSpectrum(specDb, mag2, sampleRate, centerFreq) {
+        const shown = state.filterEnabled ? cwFilter.process(specDb) : specDb;
+        waterfall.addSlice(shown);
+        smeter.updateFromSpectrum(
+            mag2, sampleRate, centerFreq, state.tunedFreq, state.modulation, state.cwBandwidth, clientFft.enbw
+        );
+    }
+
+    /** Wideband waterfall. QRSS draws from its own decimator and does not use this ring. */
     function consumeSpectrumSlices() {
+        if (state.qrssEnabled) {
+            const hop = spectrumHopSize();
+            if (samplesAvailable > hop * 8) samplesAvailable = hop * 8;
+            return;
+        }
         const hopSize = spectrumHopSize();
-        const avgN = state.qrssEnabled ? qrssAvgCount() : 1;
-
-        while (samplesAvailable >= state.fftSize) {
-
-            let readIdx = (ringHead - samplesAvailable + RING_SIZE) % RING_SIZE;
-            for (let i = 0; i < state.fftSize; i++) {
-                blockReal[i] = ringReal[readIdx];
-                blockImag[i] = ringImag[readIdx];
-                readIdx = readIdx === RING_SIZE - 1 ? 0 : readIdx + 1;
-            }
-
-            const specDb = clientFft.computeSpectrumDb(blockReal, blockImag);
-
-            if (state.qrssEnabled) {
-                const mag2 = clientFft.mag2Buffer;
-                const n = specDb.length;
-                for (let i = 0; i < n; i++) qrssAcc[i] += mag2[i];
-                qrssCount++;
-                if (qrssCount < avgN) {
-                    samplesAvailable -= hopSize;
-                    continue;
-                }
-                const inv = 1.0 / qrssCount;
-                for (let i = 0; i < n; i++) {
-                    specDb[i] = 10.0 * Math.log10(Math.max(qrssAcc[i] * inv, 1e-15));
-                    qrssAcc[i] = 0;
-                }
-                qrssCount = 0;
-            }
-
-            const processed = state.filterEnabled ? cwFilter.process(specDb) : specDb;
-            waterfall.addSlice(processed);
-
-            smeter.updateFromSpectrum(specDb, state.sampleRate, state.centerFreq, state.tunedFreq, state.modulation, state.cwBandwidth);
-
+        const n = state.fftSize;
+        while (samplesAvailable >= n) {
+            const start = (ringHead - samplesAvailable + RING_SIZE) % RING_SIZE;
+            const specDb = clientFft.computeSpectrumFromRing(ringReal, ringImag, RING_SIZE, start, true);
+            paintSpectrum(specDb, clientFft.mag2Buffer, state.sampleRate, state.centerFreq);
             samplesAvailable -= hopSize;
         }
+    }
+
+    function onQrssSample(i, q) {
+        if (qrssPlanSpeed !== state.speedMultiplier) applyQrssPlan();
+        const spec = qrss.push(i, q);
+        if (!spec || !state.qrssEnabled) return;
+        const shown = state.filterEnabled ? cwFilter.process(spec) : spec;
+        waterfall.addSlice(shown);
+        smeter.updateFromSpectrum(
+            qrss.fft.mag2Buffer, qrss.outRate, state.tunedFreq, state.tunedFreq,
+            state.modulation, state.cwBandwidth, qrss.fft.enbw
+        );
     }
 
     function resetIqPipeline() {
@@ -398,22 +404,41 @@ document.addEventListener('DOMContentLoaded', () => {
         resetIqPipeline();
         waterfall.setCenterFreq(state.centerFreq, rate);
         applyDialRange();
-        if (rate < 30000) waterfall.zoomMin();
+        if (state.qrssEnabled) applyQrssView();
+        else if (rate < 30000) waterfall.zoomMin();
         else if (waterfall.zoom <= 1.01) waterfall.setZoom(2.67);
     }
 
-    /** Centre the waterfall on the frequency the source actually tuned to. */
-    function applyCenter(hz) {
+    /** QRSS replaces the wideband waterfall with a few hundred hertz around the dial. */
+    function applyQrssView() {
+        qrss.setInputRate(demodulator.audioRate);
+        applyQrssPlan();
+        waterfall.zoom = 1;
+        waterfall.panOffset = 0;
+        waterfall.setCenterFreq(state.tunedFreq, qrss.outRate || 375);
+        waterfall.setTunedFreq(state.tunedFreq, state.lowCut, state.highCut, state.modulation);
+    }
+
+    /**
+     * Move the displayed centre immediately so a ruler drag accumulates.
+     * Does not flush the IQ ring; applyCenter does that when the source
+     * confirms a centre we have not already shown.
+     */
+    function shiftCenter(hz) {
         const next = Math.round(hz);
-        if (next === state.centerFreq) return;
+        if (next === state.centerFreq) return false;
         state.centerFreq = next;
         const half = state.sampleRate / 2;
         const maxOff = Math.max(0, half - 50);
         if (state.tunedFreq > state.centerFreq + maxOff) state.tunedFreq = Math.round(state.centerFreq + maxOff);
         if (state.tunedFreq < state.centerFreq - maxOff) state.tunedFreq = Math.round(state.centerFreq - maxOff);
         waterfall.panOffset = 0;
-        waterfall.setCenterFreq(state.centerFreq, state.sampleRate);
-        resetIqPipeline();
+        if (state.qrssEnabled) {
+            waterfall.zoom = 1;
+            waterfall.setCenterFreq(state.tunedFreq, qrss.outRate || 375);
+        } else {
+            waterfall.setCenterFreq(state.centerFreq, state.sampleRate);
+        }
         demodulator.configure({
             offsetFreq: state.tunedFreq - state.centerFreq,
             modulation: state.modulation,
@@ -421,8 +446,19 @@ document.addEventListener('DOMContentLoaded', () => {
             bfoPitch: state.cwOffset
         });
         waterfall.setTunedFreq(state.tunedFreq, state.lowCut, state.highCut, state.modulation);
+        const dialHz = source.protocol === 'ic7300' && state.ic7300RadioHz > 0
+            ? state.ic7300RadioHz
+            : state.tunedFreq;
+        valueDial.setValue(dialHz, false);
         updateTopBarInfo();
         updateSourceStatus();
+        return true;
+    }
+
+    /** Centre the waterfall on the frequency the source actually tuned to. */
+    function applyCenter(hz) {
+        if (!shiftCenter(hz)) return;
+        resetIqPipeline();
     }
 
     const conn = new DidahConnection({
@@ -802,12 +838,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (source.protocol === 'kiwi' || source.protocol === 'rtlsdr') {
             const next = Math.round(state.centerFreq + deltaHz);
-            const liveKiwi = source.protocol === 'kiwi' && kiwi && kiwi.connected;
-            const liveRtl = source.protocol === 'rtlsdr' && rtl && rtl.connected;
-            if (liveKiwi) kiwi.tune(next);
-            else if (liveRtl) rtl.setDisplayHz(next);
-            else applyCenter(next);
-            setTunedFrequency(state.tunedFreq, true, true);
+            shiftCenter(next);
+            if (source.protocol === 'kiwi' && kiwi && kiwi.connected) kiwi.tune(state.centerFreq);
+            else if (source.protocol === 'rtlsdr' && rtl && rtl.connected) rtl.setDisplayHz(state.centerFreq);
             return;
         }
         waterfall.panOffset += deltaHz;
@@ -833,11 +866,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (source.protocol === 'kiwi' || source.protocol === 'rtlsdr') {
             const half = state.sampleRate / 2;
             if (Math.abs(state.tunedFreq - state.centerFreq) > half - 50) {
-                const liveKiwi = source.protocol === 'kiwi' && kiwi && kiwi.connected;
-                const liveRtl = source.protocol === 'rtlsdr' && rtl && rtl.connected;
-                if (liveKiwi) kiwi.tune(state.tunedFreq);
-                else if (liveRtl) rtl.setDisplayHz(state.tunedFreq);
-                else applyCenter(state.tunedFreq);
+                shiftCenter(state.tunedFreq);
+                if (source.protocol === 'kiwi' && kiwi && kiwi.connected) kiwi.tune(state.centerFreq);
+                else if (source.protocol === 'rtlsdr' && rtl && rtl.connected) rtl.setDisplayHz(state.centerFreq);
             }
         }
 
@@ -859,6 +890,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         waterfall.setTunedFreq(state.tunedFreq, state.lowCut, state.highCut, state.modulation);
+        if (state.qrssEnabled) {
+            qrss.reset();
+            waterfall.zoom = 1;
+            waterfall.panOffset = 0;
+            waterfall.setCenterFreq(state.tunedFreq, qrss.outRate || 375);
+            waterfall.clear();
+        }
         cwDecoder.reset();
         sendDspControl();
     }
@@ -1219,9 +1257,6 @@ document.addEventListener('DOMContentLoaded', () => {
         state.fftSize = parseInt(e.target.value, 10);
         clientFft.setSize(state.fftSize);
         cwFilter.resize(state.fftSize);
-        blockReal = new Float32Array(state.fftSize);
-        blockImag = new Float32Array(state.fftSize);
-        qrssAcc = new Float32Array(state.fftSize);
         resetQrssAcc();
         samplesAvailable = 0;
     });
@@ -1340,19 +1375,44 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // 10. CW Adaptive Filter, QRSS, and Click Filter
+    // 10. CW waterfall filter and QRSS
+    function applySpectrumWindow() {
+        clientFft.initWindow(state.filterEnabled ? 'flattop' : 'bh4');
+    }
+
     const cwFilterToggle = document.getElementById('cw-filter-toggle');
     cwFilterToggle.addEventListener('click', () => {
         state.filterEnabled = !state.filterEnabled;
         cwFilter.enabled = state.filterEnabled;
+        applySpectrumWindow();
         cwFilterToggle.classList.toggle('active', state.filterEnabled);
         cwFilterToggle.textContent = state.filterEnabled ? 'CW Filter: ON' : 'CW Filter: OFF';
     });
 
+    let qrssSavedView = null;
     function setQrssEnabled(on) {
-        state.qrssEnabled = !!on;
-        clientFft.initWindow(state.qrssEnabled ? 'blackman' : 'flattop');
-        resetQrssAcc();
+        const next = !!on;
+        if (next === state.qrssEnabled) return;
+        state.qrssEnabled = next;
+        if (next) {
+            qrssSavedView = { zoom: waterfall.zoom, pan: waterfall.panOffset };
+            demodulator.qrssPush = onQrssSample;
+            qrss.reset();
+            applyQrssView();
+            waterfall.clear();
+        } else {
+            demodulator.qrssPush = null;
+            qrss.reset();
+            if (qrssSavedView) {
+                waterfall.zoom = qrssSavedView.zoom;
+                waterfall.panOffset = qrssSavedView.pan;
+            }
+            waterfall.setCenterFreq(state.centerFreq, state.sampleRate);
+            waterfall.setTunedFreq(state.tunedFreq, state.lowCut, state.highCut, state.modulation);
+            waterfall.clear();
+            ringHead = 0;
+            samplesAvailable = 0;
+        }
         const btn = document.getElementById('qrss-toggle');
         if (btn) {
             btn.classList.toggle('active', state.qrssEnabled);
