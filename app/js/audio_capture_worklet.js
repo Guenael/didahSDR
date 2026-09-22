@@ -3,7 +3,8 @@
  *
  * processorOptions.mode is 'stereo-iq' or 'real-if'. Real-IF mode expects
  * demodulator.js and ic7300_if.js to have been addModule'd first.
- * Packs ~25 ms of Float32 interleaved I/Q (±1). No allocations in process()
+ * Packs ~25 ms of Float32 interleaved I/Q (±1). Stereo I/Q uses packStereoIq
+ * from soundcard.js (addModule that file first). No allocations in process()
  * once the buffer pool is filled.
  */
 class AudioCaptureProcessor extends AudioWorkletProcessor {
@@ -19,6 +20,9 @@ class AudioCaptureProcessor extends AudioWorkletProcessor {
         } else {
             this.conv = null;
             this.outRate = sampleRate;
+            if (typeof globalThis.packStereoIq !== 'function') {
+                throw new Error('audio-capture needs packStereoIq; load soundcard.js first');
+            }
         }
         this.framesTarget = Math.max(64, Math.round(this.outRate * 0.025));
         this.pool = [];
@@ -73,14 +77,14 @@ class AudioCaptureProcessor extends AudioWorkletProcessor {
         const ch1 = input[1] && input[1].length ? input[1] : null;
         const n = ch0.length;
         const swap = this.swap;
-        for (let i = 0; i < n; i++) {
-            if (!this._slot()) continue;
-            const iSamp = swap ? (ch1 ? ch1[i] : 0) : ch0[i];
-            const qSamp = swap ? ch0[i] : (ch1 ? ch1[i] : 0);
-            const o = this.fill * 2;
-            this.cur[o] = iSamp;
-            this.cur[o + 1] = qSamp;
-            this.fill++;
+        const pack = globalThis.packStereoIq;
+        let i = 0;
+        while (i < n) {
+            if (!this._slot()) break;
+            const take = Math.min(this.framesTarget - this.fill, n - i);
+            pack(ch0, ch1, swap, this.cur, this.fill, take, i);
+            this.fill += take;
+            i += take;
             if (this.fill === this.framesTarget) this._emit();
         }
         return true;

@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from server.replay_server import WavIQLooper, create_app, find_wav_file
+import asyncio
+
+from server.replay_server import WavIQLooper, chunk_sample_count, create_app, enqueue_packet, find_wav_file
 
 
 def test_wav_iq_looper():
@@ -60,6 +62,33 @@ def test_looper_rejects_bad_data_chunk(tmp_path):
 def test_create_app():
     wav_path = find_wav_file()
     static_dir = Path(__file__).resolve().parent.parent / "app"
-    app = create_app(wav_path, static_dir, center_freq=14048000, fps=30)
+    app = create_app(wav_path, static_dir, center_freq=14048000)
     assert app is not None
     assert "server" in app
+
+
+def test_chunk_samples_96000_is_exact():
+    acc = 0.0
+    for _ in range(40):
+        n, acc = chunk_sample_count(96000, acc)
+        assert n == 2400
+    assert acc == 0.0
+
+
+def test_chunk_samples_44100_sums_to_one_second():
+    acc = 0.0
+    total = 0
+    for _ in range(40):
+        n, acc = chunk_sample_count(44100, acc)
+        total += n
+    assert total == 44100
+    assert abs(acc) < 1e-6
+
+
+def test_enqueue_drops_oldest_when_full():
+    queue = asyncio.Queue(maxsize=2)
+    enqueue_packet(queue, b"a")
+    enqueue_packet(queue, b"b")
+    enqueue_packet(queue, b"c")
+    assert queue.get_nowait() == b"b"
+    assert queue.get_nowait() == b"c"

@@ -531,8 +531,6 @@ document.addEventListener('DOMContentLoaded', () => {
             setTunedFrequency(state.tunedFreq, true, false);
             updateTopBarInfo();
             updateSourceStatus();
-
-            conn.setStreamMode('raw_iq');
         },
         onRawIQ: (iq, n) => {
             if (!acceptIq(source.protocol, 'didah', conn.connected, null, null)) return;
@@ -1063,7 +1061,7 @@ document.addEventListener('DOMContentLoaded', () => {
             urlEl.title = parsed.href;
             urlEl.value = parsed.href;
         }
-        const kiwiSrc = findSource('f4kiy');
+        const kiwiSrc = findSource('oh5ae');
         kiwiSrc.host = parsed.host;
         kiwiSrc.port = parsed.port;
         kiwiSrc.secure = parsed.secure;
@@ -1076,15 +1074,15 @@ document.addEventListener('DOMContentLoaded', () => {
             setStatus('Invalid KiwiSDR URL', false);
             return;
         }
-        const radio = document.querySelector('input[name="iq-source"][value="f4kiy"]');
+        const radio = document.querySelector('input[name="iq-source"][value="oh5ae"]');
         if (radio && !radio.checked) {
             radio.checked = true;
-            selectSource('f4kiy', true);
+            selectSource('oh5ae', true);
             return;
         }
         updateSourceStatus();
         if (!state.running) return;
-        const kiwiSrc = findSource('f4kiy');
+        const kiwiSrc = findSource('oh5ae');
         setStatus(`Connecting to ${kiwiSrc.host}:${kiwiSrc.port}…`, false);
         connectActive();
     }
@@ -1092,6 +1090,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function applySourcePresets(src, force) {
         let seen = {};
         try { seen = JSON.parse(localStorage.getItem('didah_presets_seen') || '{}') || {}; } catch (e) { seen = {}; }
+        if (src.id === 'oh5ae' && seen.f4kiy && !seen.oh5ae) seen.oh5ae = 1;
         if (!force && seen[src.id]) return;
         seen[src.id] = 1;
         try { localStorage.setItem('didah_presets_seen', JSON.stringify(seen)); } catch (e) { /* storage unavailable */ }
@@ -1848,7 +1847,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
         if (saved.selectedSourceId) {
-            const el = document.querySelector(`input[name="iq-source"][value="${saved.selectedSourceId}"]`);
+            const sourceId = saved.selectedSourceId === 'f4kiy' ? 'oh5ae' : saved.selectedSourceId;
+            const el = document.querySelector(`input[name="iq-source"][value="${sourceId}"]`);
             if (el) el.checked = true;
         }
         if (saved.kiwiUrl) {
@@ -1937,7 +1937,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (kiwiCard) {
             kiwiCard.addEventListener('click', (e) => {
                 if (e.target === kiwiUrlEl || e.target === kiwiConnectBtn || (kiwiConnectBtn && kiwiConnectBtn.contains(e.target))) return;
-                const radio = document.querySelector('input[name="iq-source"][value="f4kiy"]');
+                const radio = document.querySelector('input[name="iq-source"][value="oh5ae"]');
                 if (radio && !radio.checked) {
                     radio.checked = true;
                     radio.dispatchEvent(new Event('change', { bubbles: true }));

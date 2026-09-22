@@ -5,7 +5,7 @@ const { req } = require('./load.js');
 const {
     RTL_CAPTURE_RATE, RTL_IQ_RATE, RTL_FS4_HZ, RTL_XTAL_HZ,
     rtlNominalHz, rtlHardwareHz, rtlUsesPll, rtlApplyCenter, RtlDecimator,
-    rtlNumberToBytes
+    rtlNumberToBytes, rtlPickDevice, rtlPllPlan, RtlSdrSource
 } = req('rtlsdr.js');
 const { findSource } = req('sources.js');
 
@@ -160,4 +160,52 @@ test('decimator phase continues across bulk buffers', () => {
     const n2 = dec.process(u8.subarray(mid), u8.length - mid, dst.subarray(n1));
     assert.equal(n1 + n2, one.length);
     for (let i = 0; i < one.length; i++) assert.equal(dst[i], one[i]);
+});
+
+test('rtlPllPlan rejects an nint outside 0..63', () => {
+    assert.equal(rtlPllPlan(0, 28800000), null);
+    assert.equal(rtlPllPlan(4e9, 28800000), null);
+    const plan = rtlPllPlan(1.8e9, 28800000);
+    assert.ok(plan);
+    assert.equal(plan.nint, 31);
+    assert.ok(plan.nint >= 0 && plan.nint <= 63);
+    assert.equal(plan.ni, Math.floor((31 - 13) / 4));
+    assert.equal(plan.si, (31 - 13) % 4);
+});
+
+test('rtlPickDevice uses a granted stick and does not open the picker', async () => {
+    const stick = { vendorId: 0x0bda, productId: 0x2838 };
+    let asked = false;
+    const usb = {
+        getDevices: async () => [stick, { vendorId: 0x1234, productId: 1 }],
+        requestDevice: async () => { asked = true; return null; }
+    };
+    assert.equal(await rtlPickDevice(usb), stick);
+    assert.equal(asked, false);
+});
+
+test('rtlPickDevice opens the picker only when nothing granted matches', async () => {
+    const picked = { vendorId: 0x0bda, productId: 0x2832 };
+    let filters = null;
+    const usb = {
+        getDevices: async () => [{ vendorId: 0x1111, productId: 0x2222 }],
+        requestDevice: async (opts) => { filters = opts.filters; return picked; }
+    };
+    assert.equal(await rtlPickDevice(usb), picked);
+    assert.ok(filters.some((f) => f.vendorId === 0x0bda && f.productId === 0x2832));
+});
+
+test('USB disconnect closes only the open stick', () => {
+    const src = new RtlSdrSource({ onStatusChange() {} });
+    const device = { vendorId: 0x0bda, productId: 0x2838 };
+    let closed = 0;
+    src.close = () => { closed++; };
+    src._device = device;
+    src._handleUsbDisconnect({ device });
+    assert.equal(closed, 1);
+    src._handleUsbDisconnect({ device: { vendorId: 0x0bda, productId: 0x2838 } });
+    assert.equal(closed, 1);
+    src._device = null;
+    src._handleUsbDisconnect({ device });
+    assert.equal(closed, 1);
 });

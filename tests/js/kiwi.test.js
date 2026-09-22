@@ -27,7 +27,7 @@ function buildSndFrame({ i = 1000, q = -2000, n = 4, flags = 0x08, seq = 7, smet
 test('catalog default is VA2GKA replay; kiwi live defaults to OH5AE at 7.1 MHz', () => {
     assert.equal(SOURCES[0].id, 'va2gka');
     assert.equal(SOURCES[0].protocol, 'didah');
-    const live = findSource('f4kiy');
+    const live = findSource('oh5ae');
     assert.equal(live.protocol, 'kiwi');
     assert.equal(live.host, 'oh5ae.dyndns.org');
     assert.equal(live.port, 8073);

@@ -31,7 +31,7 @@ const SOURCES = [
         note: 'Local stereo IQ at 48 / 96 / 192 kHz. Center is 0 Hz (offset).'
     },
     {
-        id: 'f4kiy',
+        id: 'oh5ae',
         label: 'KiwiSDR Live',
         protocol: 'kiwi',
         host: 'oh5ae.dyndns.org',

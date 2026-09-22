@@ -143,7 +143,7 @@ class WavIQLooper:
 
     async def prefetch_loop(self):
         """Keeps up to `prefetch_blocks` blocks queued, reading in a thread so the event loop never blocks."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         while True:
             if len(self._blocks) < self.prefetch_blocks:
                 block = await loop.run_in_executor(None, self._read_block, self._read_pos)
@@ -158,28 +158,59 @@ class WavIQLooper:
             self._fd = None
 
 
+IQ_TICK_S = 0.025
+CLIENT_QUEUE_MAX = 8
+
+
+def chunk_sample_count(sample_rate: float, acc: float, tick_s: float = IQ_TICK_S) -> tuple[int, float]:
+    """Complex samples for one paced tick, carrying the fractional remainder.
+
+    ``int(rate * tick)`` drops a fraction of a sample every tick. At 44.1 kHz that is
+    half a sample, 20 samples per second short of the file rate. The accumulator adds
+    ``rate * tick`` and emits the integer part, so one second of ticks sums to the rate.
+    """
+    acc += float(sample_rate) * tick_s
+    n = int(acc)
+    if n < 0:
+        n = 0
+    return n, acc - n
+
+
+def enqueue_packet(queue: asyncio.Queue, packet: bytes) -> None:
+    """Queue one IQ packet. A full queue drops the oldest packet, not the new one."""
+    if queue.full():
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return
+    try:
+        queue.put_nowait(packet)
+    except asyncio.QueueFull:
+        pass
+
+
 class ClientSession:
     """State for a connected WebSocket client."""
 
     def __init__(self, ws: web.WebSocketResponse):
         self.ws = ws
-        self.stream_mode = "raw_iq"
+        self.queue: asyncio.Queue = asyncio.Queue(maxsize=CLIENT_QUEUE_MAX)
+        self.sender: asyncio.Task | None = None
 
 
 class DidahServer:
-    def __init__(self, looper: WavIQLooper, static_dir: Path, center_freq: int = 14048000, fps: int = 30):
+    def __init__(self, looper: WavIQLooper, static_dir: Path, center_freq: int = 14048000):
         self.looper = looper
         self.static_dir = static_dir
         self.center_freq = center_freq
         self.samp_rate = looper.framerate  # 96000
-        self.fps = fps
-        self.step_samples = max(256, int(self.samp_rate / self.fps))
         self.clients: dict[web.WebSocketResponse, ClientSession] = {}
 
     async def handle_websocket(self, request):
-        ws = web.WebSocketResponse()
+        ws = web.WebSocketResponse(heartbeat=10)
         await ws.prepare(request)
         session = ClientSession(ws)
+        session.sender = asyncio.create_task(self._send_loop(session))
         self.clients[ws] = session
         logger.info(f"Client connected from {request.remote}. Total clients: {len(self.clients)}")
 
@@ -199,7 +230,6 @@ class DidahServer:
                                 "start_freq": self.center_freq + 2800,
                                 "start_mod": "cw",
                                 "fft_size": 2048,
-                                "fft_fps": self.fps,
                                 "fft_compression": "none",
                                 "audio_compression": "none",
                                 "waterfall_min_level": -90,
@@ -207,52 +237,55 @@ class DidahServer:
                             },
                         }
                         await ws.send_str(json.dumps(config_msg))
-                    else:
-                        # No server-side DSP: "dspcontrol" and any other message types are ignored.
-                        try:
-                            data = json.loads(text)
-                            if data.get("type") == "set_stream_mode":
-                                session.stream_mode = data.get("mode", "raw_iq")
-                                logger.info(f"Client set stream_mode to '{session.stream_mode}'")
-                        except json.JSONDecodeError:
-                            pass
+                    # No server-side DSP. "dspcontrol" and any other client JSON are ignored.
 
                 elif msg.type == aiohttp.WSMsgType.ERROR:
                     logger.warning(f"WebSocket error: {ws.exception()}")
         finally:
             self.clients.pop(ws, None)
+            if session.sender is not None:
+                session.sender.cancel()
             logger.info(f"Client disconnected. Remaining clients: {len(self.clients)}")
         return ws
 
+    async def _send_loop(self, session: ClientSession) -> None:
+        """Drains one client's queue. A slow socket cannot block the broadcast clock or other clients."""
+        try:
+            while True:
+                packet = await session.queue.get()
+                if packet is None:
+                    break
+                await session.ws.send_bytes(packet)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug("IQ send failed; dropping client")
+        finally:
+            self.clients.pop(session.ws, None)
+
     async def raw_iq_broadcast_loop(self):
         """Streams raw 16-bit interleaved IQ chunks (type 0x03) for client-side FFT and demodulation."""
-        block_duration = 0.025  # 25ms chunks (40 chunks/sec)
-        num_iq_samples = int(self.samp_rate * block_duration)  # 2400 complex samples = 9600 bytes
-        logger.info(f"Starting raw IQ stream loop ({num_iq_samples} samples per {block_duration*1000:.1f}ms chunk)...")
+        logger.info(f"Starting raw IQ stream loop ({IQ_TICK_S * 1000:.0f} ms tick)...")
 
         # Pace against an absolute deadline. Computing each sleep from the previous iteration's elapsed
         # time lets asyncio.sleep() overshoot accumulate into a permanent rate error (~1.6% slow measured),
         # which drains the client's jitter buffer and causes periodic audio underruns.
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         next_tick = loop.time()
+        acc = 0.0
         while True:
-            raw_clients = [ws for ws, s in self.clients.items() if s.stream_mode == "raw_iq"]
-            if raw_clients:
-                raw_bytes = self.looper.next_raw_iq_bytes(num_iq_samples)
-                # Packet: 0x03 followed by 16-bit interleaved IQ samples
-                packet = bytes([0x03]) + raw_bytes
-                disconnected = []
-                for ws in raw_clients:
-                    try:
-                        await ws.send_bytes(packet)
-                    except Exception:
-                        disconnected.append(ws)
-                for ws in disconnected:
-                    self.clients.pop(ws, None)
+            if self.clients:
+                n, acc = chunk_sample_count(self.samp_rate, acc, IQ_TICK_S)
+                if n:
+                    raw_bytes = self.looper.next_raw_iq_bytes(n)
+                    # Packet: 0x03 followed by 16-bit interleaved IQ samples
+                    packet = bytes([0x03]) + raw_bytes
+                    for session in list(self.clients.values()):
+                        enqueue_packet(session.queue, packet)
 
-            next_tick += block_duration
+            next_tick += IQ_TICK_S
             delay = next_tick - loop.time()
-            if delay < -block_duration:
+            if delay < -IQ_TICK_S:
                 # Fell more than one period behind (e.g. process was suspended): resync instead of bursting
                 next_tick = loop.time()
                 delay = 0.0
@@ -281,9 +314,9 @@ async def start_background_tasks(app):
     server.looper.close()
 
 
-def create_app(wav_path: str, static_dir: Path, center_freq: int, fps: int):
+def create_app(wav_path: str, static_dir: Path, center_freq: int):
     looper = WavIQLooper(wav_path)
-    server = DidahServer(looper, static_dir, center_freq=center_freq, fps=fps)
+    server = DidahServer(looper, static_dir, center_freq=center_freq)
 
     @web.middleware
     async def isolation_headers(request, handler):
@@ -334,7 +367,6 @@ def main():
     parser.add_argument("--port", type=int, default=9000, help="Port to listen on (default: 9000)")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host IP to bind (default: 0.0.0.0)")
     parser.add_argument("--center-freq", type=int, default=14048000, help="Center frequency in Hz (default: 14048000)")
-    parser.add_argument("--fps", type=int, default=30, help="Spectrum frames per second (default: 30)")
     args = parser.parse_args()
 
     wav_file = find_wav_file(args.wav)
@@ -343,7 +375,7 @@ def main():
     logger.info(f"Serving static files from: {static_dir}")
     logger.info(f"didahSDR web server: http://localhost:{args.port}/")
 
-    app = create_app(wav_file, static_dir, args.center_freq, args.fps)
+    app = create_app(wav_file, static_dir, args.center_freq)
     web.run_app(app, host=args.host, port=args.port)
 
 

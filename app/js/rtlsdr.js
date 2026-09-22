@@ -82,6 +82,50 @@ function rtlUsesPll(mode, nominalHz) {
     return !direct;
 }
 
+function rtlUsbMatch(device) {
+    if (!device) return false;
+    for (let i = 0; i < RTL_USB_FILTERS.length; i++) {
+        const f = RTL_USB_FILTERS[i];
+        if (f.vendorId === device.vendorId && f.productId === device.productId) return true;
+    }
+    return false;
+}
+
+/**
+ * A stick the page already has permission for is opened with no picker.
+ * requestDevice (the browser chooser) runs only when getDevices() has no match.
+ */
+async function rtlPickDevice(usb) {
+    if (!usb) return null;
+    if (typeof usb.getDevices === 'function') {
+        const granted = await usb.getDevices();
+        if (granted) {
+            for (let i = 0; i < granted.length; i++) {
+                if (rtlUsbMatch(granted[i])) return granted[i];
+            }
+        }
+    }
+    if (typeof usb.requestDevice !== 'function') return null;
+    return usb.requestDevice({ filters: RTL_USB_FILTERS });
+}
+
+/**
+ * R820T PLL integers for a VCO frequency. null when nint is outside 0..63:
+ * the synthesizer has no divider for that VCO. ni/si match the register write
+ * for a legal nint (13..63 is the range a locked VCO actually uses).
+ */
+function rtlPllPlan(vcoFreq, pllRef) {
+    const ref2 = 2 * pllRef;
+    if (!(pllRef > 0) || !(vcoFreq > 0)) return null;
+    const nint = Math.floor(vcoFreq / ref2);
+    if (nint < 0 || nint > 63) return null;
+    const vcoFra = vcoFreq - ref2 * nint;
+    const ni = Math.floor((nint - 13) / 4);
+    const si = (nint - 13) % 4;
+    const sdm = Math.min(65535, Math.floor((32768 * vcoFra) / pllRef));
+    return { nint, ni, si, sdm, vcoFra };
+}
+
 /**
  * 8:1 CIC (N=5, M=1) plus the compensator. State is kept across bulk buffers
  * so the fs/4 phase does not slip. Integrators wrap in int32; the comb output
@@ -537,22 +581,19 @@ class R820Tuner {
         else if (vcoFine < 2) divNum++;
         await this._mask(0x10, divNum << 5, 0b11100000);
         const vcoFreq = freq * mixDiv;
-        const nint = Math.floor(vcoFreq / (2 * pllRef));
-        const vcoFra = vcoFreq % (2 * pllRef);
-        if (nint > 63) {
+        const plan = rtlPllPlan(vcoFreq, pllRef);
+        if (!plan) {
             this.hasPllLock = false;
             return 0;
         }
-        const ni = Math.floor((nint - 13) / 4);
-        const si = (nint - 13) % 4;
-        await this._mask(0x14, ni + (si << 6), 0b11111111);
-        await this._mask(0x12, vcoFra === 0 ? 0b1000 : 0b0000, 0b00001000);
-        const sdm = Math.min(65535, Math.floor((32768 * vcoFra) / pllRef));
-        await this._mask(0x16, sdm >> 8, 0b11111111);
-        await this._mask(0x15, sdm & 0xff, 0b11111111);
+        await this._mask(0x14, plan.ni + (plan.si << 6), 0b11111111);
+        await this._mask(0x12, plan.vcoFra === 0 ? 0b1000 : 0b0000, 0b00001000);
+        await this._mask(0x16, plan.sdm >> 8, 0b11111111);
+        await this._mask(0x15, plan.sdm & 0xff, 0b11111111);
         await this._waitPll();
+        if (!this.hasPllLock) return 0;
         await this._mask(0x1a, 0b00001000, 0b00001000);
-        return (2 * pllRef * (nint + sdm / 65536)) / mixDiv;
+        return (2 * pllRef * (plan.nint + plan.sdm / 65536)) / mixDiv;
     }
 
     async _waitPll() {
@@ -564,7 +605,7 @@ class R820Tuner {
                 return;
             }
             if (!first) {
-                this.hasPllLock = true;
+                this.hasPllLock = false;
                 return;
             }
             await this._mask(0x12, 0b01100000, 0b11100000);
@@ -681,6 +722,7 @@ class RtlSdrSource {
         this._freqTimer = null;
         this._tuneSeq = 0;
         this._decimator = new RtlDecimator();
+        this._usbDisconnect = null;
         // The next IN is queued before demod runs. WebUSB allows only one
         // transferIn at a time; the transfer buffer stays valid until that call returns.
         this._out = new Int16Array((RTL_BULK_BYTES / 2 / RTL_DECIM) * 2);
@@ -785,12 +827,34 @@ class RtlSdrSource {
             try { await com.release(); } catch (e) { /* unplug */ }
             await com.close();
         }
+        this._disarmUsbDisconnect();
         this._status('RTL-SDR disconnected', false);
+    }
+
+    _armUsbDisconnect() {
+        const usb = typeof navigator !== 'undefined' ? navigator.usb : null;
+        if (!usb || typeof usb.addEventListener !== 'function' || this._usbDisconnect) return;
+        this._usbDisconnect = (ev) => this._handleUsbDisconnect(ev);
+        usb.addEventListener('disconnect', this._usbDisconnect);
+    }
+
+    _disarmUsbDisconnect() {
+        const usb = typeof navigator !== 'undefined' ? navigator.usb : null;
+        if (usb && this._usbDisconnect && typeof usb.removeEventListener === 'function') {
+            usb.removeEventListener('disconnect', this._usbDisconnect);
+        }
+        this._usbDisconnect = null;
+    }
+
+    _handleUsbDisconnect(ev) {
+        const device = ev && ev.device;
+        if (!this._device || device !== this._device) return;
+        this.close();
     }
 
     async _open() {
         const usb = typeof navigator !== 'undefined' ? navigator.usb : null;
-        if (!usb || !usb.requestDevice) {
+        if (!usb || (typeof usb.getDevices !== 'function' && typeof usb.requestDevice !== 'function')) {
             this._status('WebUSB needs Chrome or Edge', false);
             return false;
         }
@@ -798,8 +862,12 @@ class RtlSdrSource {
             const gen = this._gen | 0;
             let device;
             try {
-                device = await usb.requestDevice({ filters: RTL_USB_FILTERS });
+                device = await rtlPickDevice(usb);
             } catch (e) {
+                this._status('No RTL-SDR selected', false);
+                return false;
+            }
+            if (!device) {
                 this._status('No RTL-SDR selected', false);
                 return false;
             }
@@ -828,6 +896,7 @@ class RtlSdrSource {
                 this._tuner = tuner;
                 this._front = 'tuner';
                 this.connected = true;
+                this._armUsbDisconnect();
                 this._feedGen = gen;
                 await this._applyPpm();
                 await this._applySampleRate();
@@ -1040,6 +1109,6 @@ if (typeof module !== 'undefined') {
     module.exports = {
         RTL_CAPTURE_RATE, RTL_IQ_RATE, RTL_FS4_HZ, RTL_DECIM, RTL_XTAL_HZ, RTL_CIC_COMP,
         rtlNominalHz, rtlHardwareHz, rtlUsesPll, rtlApplyCenter, RtlDecimator, RtlSdrSource,
-        rtlNumberToBytes
+        rtlNumberToBytes, rtlUsbMatch, rtlPickDevice, rtlPllPlan
     };
 }

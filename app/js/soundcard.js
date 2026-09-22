@@ -39,23 +39,25 @@ function pickSoundRate(min, max, native) {
     return 0;
 }
 
-function clampInt16(x) {
-    if (x > 32767) return 32767;
-    if (x < -32768) return -32768;
-    return x;
-}
-
-/** Pack stereo Float32 channels into interleaved Int16 I/Q. */
-function packStereoIq(left, right, swap, dst) {
-    const n = left.length;
+/**
+ * Pack stereo Float32 channels into interleaved Float32 I/Q (±1).
+ * `dstOff` is the complex-sample index in `dst`. `count` frames are read
+ * from `srcOff` (default: the whole of `left`). A missing right channel is silence.
+ * The capture worklet calls this; do not keep a second copy of the mapping.
+ */
+function packStereoIq(left, right, swap, dst, dstOff, count, srcOff) {
+    const n = count == null ? left.length : count;
+    const s0 = srcOff || 0;
+    const base = (dstOff || 0) * 2;
     const qSrc = right && right.length ? right : null;
     for (let i = 0; i < n; i++) {
-        const iSamp = swap ? (qSrc ? qSrc[i] : 0) : left[i];
-        const qSamp = swap ? left[i] : (qSrc ? qSrc[i] : 0);
-        dst[i * 2] = clampInt16(iSamp * 32767);
-        dst[i * 2 + 1] = clampInt16(qSamp * 32767);
+        const s = s0 + i;
+        const iSamp = swap ? (qSrc ? qSrc[s] : 0) : left[s];
+        const qSamp = swap ? left[s] : (qSrc ? qSrc[s] : 0);
+        dst[base + i * 2] = iSamp;
+        dst[base + i * 2 + 1] = qSamp;
     }
-    return dst;
+    return n;
 }
 
 /**
@@ -238,6 +240,7 @@ class SoundcardSource {
                 return;
             }
             const trackInfo = this._readTrack(stream);
+            await ctx.audioWorklet.addModule('js/soundcard.js');
             await ctx.audioWorklet.addModule('js/audio_capture_worklet.js');
             if (gen !== this._gen) {
                 stream.getTracks().forEach((t) => t.stop());
@@ -328,9 +331,11 @@ class SoundcardSource {
     }
 }
 
+if (typeof globalThis !== 'undefined') globalThis.packStereoIq = packStereoIq;
+
 if (typeof module !== 'undefined') {
     module.exports = {
         SoundcardSource, SOUND_RATES, PREFERRED_RATES, isSoundRate, pickSoundRate,
-        preferredCaptureRate, packStereoIq, classifyCapture, clampInt16
+        preferredCaptureRate, packStereoIq, classifyCapture
     };
 }

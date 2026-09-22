@@ -139,15 +139,6 @@ class DidahConnection {
         }
     }
 
-    setStreamMode(mode) {
-        if (this.ws && this.connected) {
-            this.ws.send(JSON.stringify({
-                type: 'set_stream_mode',
-                mode: mode
-            }));
-        }
-    }
-
     /** Informs the server of the current tuning; the test server ignores it, a real backend may not. */
     setDemodParams(params) {
         if (this.ws && this.connected) {
