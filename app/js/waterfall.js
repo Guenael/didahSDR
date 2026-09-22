@@ -23,14 +23,14 @@ class HorizontalWaterfall {
         // Configuration and state
         this.centerFreq = options.centerFreq || 14048000;
         this.sampleRate = options.sampleRate || 96000;
-        this.tunedFreq = options.tunedFreq || 14048700;
+        this.tunedFreq = options.tunedFreq || 14050800;
         this.lowCut = options.lowCut !== undefined ? options.lowCut : -75;
         this.highCut = options.highCut !== undefined ? options.highCut : 75;
         this.modulation = options.modulation || 'cw';
         this.stepSize = options.stepSize || 100;
 
         // Display Levels (dB)
-        this.minLevel = options.minLevel !== undefined ? options.minLevel : -127;
+        this.minLevel = options.minLevel !== undefined ? options.minLevel : -130;
         this.dynamicRange = options.dynamicRange !== undefined ? options.dynamicRange : 60;
 
         // Colormaps: passband uses the reversed primary theme (synthesized if needed)

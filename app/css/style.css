@@ -636,6 +636,27 @@ input[type="range"]::-webkit-slider-thumb:hover {
     color: #4ade80;
 }
 
+/* Audio effect: button and slider on one row, sliders sharing a left edge. */
+.fx-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.fx-row .toggle-btn {
+    flex: 0 0 156px;
+    justify-content: flex-start;
+    font-size: 11px;
+    padding: 5px 8px;
+    white-space: nowrap;
+}
+
+.fx-row input[type="range"] {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: auto;
+}
+
 /* ==========================================================================
    4. MODAL DIALOG (HELP / SHORTCUTS)
    ========================================================================== */
@@ -1122,6 +1143,16 @@ kbd {
     gap: 6px;
     min-width: 0;
     width: 100%;
+}
+
+.source-field {
+    align-items: center;
+}
+
+.source-field-label {
+    flex: 0 0 96px;
+    font-size: 11px;
+    color: var(--text-muted);
 }
 
 .source-option:hover {

@@ -312,7 +312,7 @@ class RtlCom {
         }
         const view = result.data;
         const n = Math.min(dst.length, view.byteLength);
-        for (let i = 0; i < n; i++) dst[i] = view.getUint8(i);
+        if (n > 0) dst.set(new Uint8Array(view.buffer, view.byteOffset, n));
         return n;
     }
 
@@ -643,7 +643,11 @@ class RtlSdrSource {
         this._freqTimer = null;
         this._tuneSeq = 0;
         this._decimator = new RtlDecimator();
+        // Two bulk buffers so the next IN transfer is queued before demod/FFT.
+        // WebUSB allows only one transferIn at a time; the gap with none queued
+        // is where the dongle overruns and the audio buffer later underruns.
         this._bulk = new Uint8Array(RTL_BULK_BYTES);
+        this._bulk2 = new Uint8Array(RTL_BULK_BYTES);
         this._out = new Int16Array((RTL_BULK_BYTES / 2 / RTL_DECIM) * 2);
     }
 
@@ -809,6 +813,20 @@ class RtlSdrSource {
         }
     }
 
+    /**
+     * Demodulate one decimated chunk in short slices. A microtask yield between
+     * slices lets a completed USB read queue the next IN before this returns.
+     */
+    async _demodSlices(iq, ns) {
+        const step = 1024; // int16 values: 512 complex samples, a few ms of demod
+        for (let i = 0; i < ns; i += step) {
+            if (!this._reading || !this.onRawIQ) return;
+            const end = i + step < ns ? i + step : ns;
+            this.onRawIQ(iq.subarray(i, end));
+            if (end < ns) await Promise.resolve();
+        }
+    }
+
     _stream() {
         if (this._reading || !this._com) return;
         this._reading = true;
@@ -824,20 +842,50 @@ class RtlSdrSource {
                 this.streaming = false;
                 return;
             }
+            // One USB read is always in flight. Demod of a 21 ms chunk can take
+            // longer than that on the main thread; if it does, the completed read
+            // sits with nothing queued and the dongle drops samples. Yielding
+            // between short slices lets the completion handler queue the next
+            // read before the FIFO overruns (~3% short is one underrun every
+            // couple of seconds, which matches the audio log).
+            const bufs = [this._bulk, this._bulk2];
+            const iqPool = [
+                new Int16Array(this._out.length),
+                new Int16Array(this._out.length),
+                new Int16Array(this._out.length),
+                new Int16Array(this._out.length)
+            ];
+            let iqSlot = 0;
+            let audioChain = Promise.resolve();
+            const fail = () => {
+                if (!this._reading) return;
+                this._reading = false;
+                this.streaming = false;
+                this._status('USB read failed', false);
+            };
+            const kick = (slot) => {
+                if (!this._reading || this._com !== com) return;
+                com.readBulk(bufs[slot]).then((n) => {
+                    if (!this._reading || this._com !== com) return;
+                    kick(slot ^ 1);
+                    if (n < 2) return;
+                    const iq = iqPool[iqSlot];
+                    iqSlot = (iqSlot + 1) % iqPool.length;
+                    const ns = this._decimator.process(bufs[slot], n, iq);
+                    if (ns < 2 || !this.onRawIQ) return;
+                    const deliver = iq;
+                    const count = ns;
+                    audioChain = audioChain
+                        .then(() => this._demodSlices(deliver, count))
+                        .catch(() => {});
+                }, fail);
+            };
+            console.info('[rtl] audio pump v3');
+            kick(0);
+            // The loop above is self-perpetuating. Park until stop/close clears _reading
+            // so _stream's caller contract (a running flag) stays true.
             while (this._reading && this._com === com) {
-                let n = 0;
-                try {
-                    n = await com.readBulk(this._bulk);
-                } catch (e) {
-                    if (!this._reading) return;
-                    this._reading = false;
-                    this.streaming = false;
-                    this._status('USB read failed', false);
-                    return;
-                }
-                if (!this._reading || n < 2) continue;
-                const samples = this._decimator.process(this._bulk, n, this._out);
-                if (samples > 0 && this.onRawIQ) this.onRawIQ(this._out.subarray(0, samples));
+                await new Promise((resolve) => { setTimeout(resolve, 250); });
             }
             this.streaming = false;
         };

@@ -12,10 +12,10 @@ const SOURCES = [
         id: 'va2gka',
         label: 'VA2GKA Replay',
         protocol: 'didah',
-        minLevel: -127,
+        minLevel: -130,
         dynamicRange: 60,
         fftSize: 2048,
-        startFreq: 14048700,
+        startFreq: 14050800,
         startMod: 'cw',
         note: 'Local 96 kHz IQ recording, looped.'
     },

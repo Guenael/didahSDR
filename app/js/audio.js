@@ -18,7 +18,6 @@ class WebAudioPlayer {
         this.volume = 0.8;
         this.muted = false;
         this.INPUT_RATE = 48000;     // demodulator output rate; the context is asked for the same rate
-        this.WORKLET_V = '2';        // cache-bust Firefox's AudioWorklet module map
 
         this.onStateChange = null;
         this.onLevel = null;
@@ -63,8 +62,8 @@ class WebAudioPlayer {
 
         this.ctx.onstatechange = () => this.emitState();
 
-        this.initPromise = this.ctx.audioWorklet.addModule(`js/cw_keyer.js?v=${this.WORKLET_V}`)
-            .then(() => this.ctx.audioWorklet.addModule(`js/audio_worklet.js?v=${this.WORKLET_V}`))
+        this.initPromise = this.ctx.audioWorklet.addModule('js/cw_keyer.js')
+            .then(() => this.ctx.audioWorklet.addModule('js/audio_worklet.js'))
             .then(() => {
                 this.node = new AudioWorkletNode(this.ctx, 'didah-audio', { numberOfInputs: 0, outputChannelCount: [1] });
                 this.node.port.onmessage = (e) => this.handleWorkletMessage(e.data);

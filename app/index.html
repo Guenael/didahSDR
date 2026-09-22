@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>didahSDR — Software Defined Radio for CW operators</title>
+    <title>didahSDR — Software Defined Radio for CW operators — v0.8.2</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="css/dial.css">
     <link rel="stylesheet" href="css/style.css">
 </head>
@@ -14,7 +15,7 @@
             <div class="top-bar-left">
                 <!-- Power button with I/O symbol -->
                 <button id="power-btn" class="power-btn active" title="Toggle Power / Waterfall / Audio" aria-label="Power">⏻</button>
-                <h1 class="app-title"><span class="title-di">di</span><span class="title-dah">dah</span><span class="title-sdr">SDR</span><span class="title-tagline"> — Software Defined Radio for CW operators</span></h1>
+                <h1 class="app-title"><span class="title-di">di</span><span class="title-dah">dah</span><span class="title-sdr">SDR</span><span class="title-tagline"> — Software Defined Radio for CW operators — v0.8.2</span></h1>
 
                 <!-- RX / TX Buttons -->
                 <div class="trx-group">
@@ -116,8 +117,8 @@
                     <div class="wconfig-section-title">WATERFALL</div>
                     <div class="control-group slider-container">
                         <label for="min-lvl-slider">WF Min Level:</label>
-                        <input id="min-lvl-slider" type="range" min="-140" max="-20" step="1" value="-127" autocomplete="off">
-                        <span id="min-lvl-val" class="slider-val">-127 dB</span>
+                        <input id="min-lvl-slider" type="range" min="-140" max="-20" step="1" value="-130" autocomplete="off">
+                        <span id="min-lvl-val" class="slider-val">-130 dB</span>
                     </div>
                     <div class="control-group slider-container">
                         <label for="dyn-range-slider">WF Dyn Range:</label>
@@ -188,28 +189,19 @@
 
                 <div class="wconfig-section" id="audio-fx-section">
                     <div class="wconfig-section-title">AUDIO</div>
-                    <div class="control-group">
+                    <div class="control-group fx-row">
                         <button id="autonotch-toggle" class="toggle-btn" title="Cancel steady heterodynes and carriers in the passband">Autonotch: OFF</button>
-                    </div>
-                    <div class="control-group slider-container">
-                        <label for="autonotch-depth-slider">Depth:</label>
-                        <input id="autonotch-depth-slider" type="range" min="25" max="100" step="5" value="70" autocomplete="off">
+                        <input id="autonotch-depth-slider" type="range" min="25" max="100" step="5" value="70" autocomplete="off" aria-label="Autonotch depth">
                         <span id="autonotch-depth-val" class="slider-val">70%</span>
                     </div>
-                    <div class="control-group">
+                    <div class="control-group fx-row">
                         <button id="nr-toggle" class="toggle-btn" title="LMS noise reduction: keep correlated CW/SSB, reject hiss">Noise Reduction: OFF</button>
-                    </div>
-                    <div class="control-group slider-container">
-                        <label for="nr-strength-slider">Strength:</label>
-                        <input id="nr-strength-slider" type="range" min="25" max="100" step="5" value="50" autocomplete="off">
+                        <input id="nr-strength-slider" type="range" min="25" max="100" step="5" value="50" autocomplete="off" aria-label="Noise reduction strength">
                         <span id="nr-strength-val" class="slider-val">50%</span>
                     </div>
-                    <div class="control-group">
+                    <div class="control-group fx-row">
                         <button id="squelch-toggle" class="toggle-btn" title="Mute the speaker until the channel is this many dB above the noise floor">Squelch: OFF</button>
-                    </div>
-                    <div class="control-group slider-container">
-                        <label for="squelch-thr-slider">Margin:</label>
-                        <input id="squelch-thr-slider" type="range" min="0" max="40" step="1" value="10" autocomplete="off">
+                        <input id="squelch-thr-slider" type="range" min="0" max="40" step="1" value="10" autocomplete="off" aria-label="Squelch margin">
                         <span id="squelch-thr-val" class="slider-val">10 dB</span>
                     </div>
                 </div>
@@ -349,12 +341,18 @@
                                 <option value="36">36 dB</option>
                                 <option value="45">45 dB</option>
                             </select>
+                        </div>
+                        <label class="source-kiwi-row source-field">
+                            <span class="source-field-label">PPM:</span>
                             <input type="number" id="rtlsdr-ppm" class="source-url-input" value="0" step="1"
                                    aria-label="Frequency correction, parts per million" title="PPM correction">
-                        </div>
-                        <div class="source-kiwi-row">
+                        </label>
+                        <label class="source-kiwi-row source-field">
+                            <span class="source-field-label">Up Frequency</span>
                             <input type="number" id="rtlsdr-upconverter" class="source-url-input" value="0" step="1000"
                                    aria-label="Upconverter offset in Hz" title="Upconverter offset, Hz. 125000000 for a 125 MHz converter.">
+                        </label>
+                        <div class="source-kiwi-row">
                             <label class="source-iq-swap">
                                 <input type="checkbox" id="rtlsdr-bias">
                                 Bias tee
@@ -495,6 +493,7 @@
                     <h3>Keyboard Shortcuts</h3>
                     <div class="shortcuts-grid">
                         <div><kbd>Space</kbd></div><div>Toggle Power (Pause/Resume)</div>
+                        <div><kbd>Enter</kbd></div><div>Toggle PTT (CW only, including the CW text box)</div>
                         <div><kbd>M</kbd></div><div>Cycle Mode (CW &rarr; USB &rarr; LSB)</div>
                         <div><kbd>&uarr;</kbd> / <kbd>&darr;</kbd></div><div>Step VFO Frequency Up / Down (according to the step selected)</div>
                         <div><kbd>&larr;</kbd> / <kbd>&rarr;</kbd></div><div>Waterfall Zoom Out / In</div>
@@ -546,7 +545,7 @@
     <script src="js/floating_window.js"></script>
     <script src="js/value_dial.js"></script>
     <script src="js/waterfall.js"></script>
-    <script src="js/audio.js?v=2"></script>
+    <script src="js/audio.js"></script>
     <script src="js/smeter.js"></script>
     <script src="js/cw_decoder.js"></script>
     <script src="js/connection.js"></script>
@@ -557,7 +556,7 @@
     <script src="js/ic7300_if.js"></script>
     <script src="js/ic7300.js"></script>
     <script src="js/rtlsdr.js"></script>
-    <script src="js/cw_keyer.js?v=2"></script>
-    <script src="js/app.js?v=3"></script>
+    <script src="js/cw_keyer.js"></script>
+    <script src="js/app.js"></script>
 </body>
 </html>

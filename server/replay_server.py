@@ -196,7 +196,7 @@ class DidahServer:
                             "value": {
                                 "samp_rate": self.samp_rate,
                                 "center_freq": self.center_freq,
-                                "start_freq": self.center_freq + 700,
+                                "start_freq": self.center_freq + 2800,
                                 "start_mod": "cw",
                                 "fft_size": 2048,
                                 "fft_fps": self.fps,
@@ -310,6 +310,12 @@ def create_app(wav_path: str, static_dir: Path, center_freq: int, fps: int):
         return web.FileResponse(static_dir / "index.html")
 
     app.router.add_get("/", index_handler)
+
+    async def favicon_handler(_request):
+        return web.FileResponse(static_dir / "favicon.svg")
+
+    app.router.add_get("/favicon.ico", favicon_handler)
+    app.router.add_get("/favicon.svg", favicon_handler)
 
     # Static assets
     app.router.add_static("/css", static_dir / "css")

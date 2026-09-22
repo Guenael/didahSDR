@@ -12,7 +12,7 @@ class SDRValueDial {
     constructor(container, options = {}) {
         this.container = typeof container === 'string' ? document.getElementById(container) : container;
         this.numDigits = options.numDigits || 9; // up to 999.999.999 Hz (999 MHz)
-        this.value = options.value || 14048700;
+        this.value = options.value || 14050800;
         this.min = options.min || 0;
         this.max = options.max || 999999999;
         this.unit = options.unit || 'Hz';

@@ -9,7 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
         running: true,
         centerFreq: 14048000,
         sampleRate: 96000,
-        tunedFreq: 14048700,
+        tunedFreq: 14050800,
         modulation: 'cw',
         cwBandwidth: 150,     // 50 to 350 Hz
         cwOffset: 700,        // 400 to 1000 Hz dedicated tone offset (default 700 Hz)
@@ -17,7 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
         lowCut: -75,          // Symmetrical around carrier for CW
         highCut: 75,
         volume: 0.8,
-        minLevel: -127,       // Default -127 dB (FFT levels are window-gain normalised)
+        minLevel: -130,       // Default -130 dB (FFT levels are window-gain normalised)
         dynamicRange: 60,     // Default 60 dB
         primaryTheme: 'viridis',
         stepSize: 100,
@@ -284,11 +284,45 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         samplesAvailable += numComplex;
 
+        // RTL-SDR shares the main thread with the USB read. Speed 4 at 192 kHz
+        // wants ~375 spectra/s, and each one uploads a WebGL column. Doing that
+        // inside the USB callback overruns the dongle and the audio buffer
+        // underruns a moment later. Demod stays here; spectra run on a short
+        // animation-frame budget, and leftover hops are dropped.
+        if (source.protocol === 'rtlsdr') scheduleRtlSpectrum();
+        else consumeSpectrumSlices(0);
+        updateTrxLeds();
+    }
+
+    let rtlSpectrumScheduled = false;
+
+    function scheduleRtlSpectrum() {
+        if (rtlSpectrumScheduled) return;
+        rtlSpectrumScheduled = true;
+        requestAnimationFrame(drainRtlSpectrum);
+    }
+
+    function drainRtlSpectrum() {
+        rtlSpectrumScheduled = false;
+        if (source.protocol !== 'rtlsdr' || !state.running) return;
+        const caughtUp = consumeSpectrumSlices(4, 2);
+        if (!caughtUp && samplesAvailable > state.fftSize) samplesAvailable = state.fftSize;
+        if (samplesAvailable >= state.fftSize) scheduleRtlSpectrum();
+    }
+
+    /** Draw waterfall slices until the ring is caught up, the time budget, or `maxSlices` (0 = no limit). */
+    function consumeSpectrumSlices(budgetMs, maxSlices) {
         const hopDiv = state.qrssEnabled ? 2 : Math.max(1, state.speedMultiplier);
         const hopSize = Math.max(128, Math.floor(state.fftSize / hopDiv));
         const avgN = state.qrssEnabled ? qrssAvgCount() : 1;
+        const deadline = budgetMs > 0 ? performance.now() + budgetMs : 0;
+        let drawn = 0;
 
         while (samplesAvailable >= state.fftSize) {
+            if (deadline && performance.now() >= deadline) return false;
+            if (maxSlices && drawn >= maxSlices) return false;
+            drawn++;
+
             let readIdx = (ringHead - samplesAvailable + RING_SIZE) % RING_SIZE;
             for (let i = 0; i < state.fftSize; i++) {
                 blockReal[i] = ringReal[readIdx];
@@ -322,7 +356,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             samplesAvailable -= hopSize;
         }
-        updateTrxLeds();
+        return true;
     }
 
     function resetIqPipeline() {
@@ -1508,6 +1542,17 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             closeHelp();
+            return;
+        }
+
+        if (e.key === 'Enter') {
+            const tag = e.target && e.target.tagName;
+            const inField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+            const inCwText = e.target && e.target.id === 'tx-text';
+            if (inField && !inCwText) return;
+            if (state.modulation !== 'cw') return;
+            e.preventDefault();
+            setTxArmed(!keyer.armed);
             return;
         }
 
