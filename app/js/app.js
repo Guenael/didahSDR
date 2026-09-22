@@ -76,6 +76,50 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateDecoderActive() {
         if (decoderWindowVisible && state.modulation === 'cw') cwDecoder.start(demodulator.audioRate);
         else cwDecoder.stop();
+        updateRecUi();
+    }
+
+    // REC: dataset clip at the decoder tap (REC-BUTTON.md). Any decoder reset / stop ends the clip.
+    const cwRecorder = new CWRecorder({ onStop: (clip) => { saveRecording(clip); updateRecUi(); } });
+    cwDecoder.recorder = cwRecorder;
+    const recBtn = document.getElementById('decoder-rec-btn');
+    const recNoiseBtn = document.getElementById('decoder-noise-btn');
+    let recNoise = false;
+    let recTimer = null;
+    let modelStamp = null;
+    fetch('models/didahcw.onnx', { method: 'HEAD' })
+        .then((r) => { modelStamp = r.headers.get('last-modified'); })
+        .catch(() => {});
+    function updateRecUi() {
+        if (!recBtn) return;
+        const on = cwRecorder.recording;
+        const s = Math.floor(cwRecorder.seconds);
+        recBtn.textContent = on ? `● ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : 'REC';
+        recBtn.classList.toggle('recording', on);
+        recBtn.disabled = !on && !cwDecoder.active;
+        if (recNoiseBtn) {
+            recNoiseBtn.classList.toggle('active', recNoise);
+            recNoiseBtn.disabled = on;
+        }
+        if (on && !recTimer) recTimer = setInterval(updateRecUi, 250);
+        if (!on && recTimer) { clearInterval(recTimer); recTimer = null; }
+    }
+    function toggleRec() {
+        if (cwRecorder.recording) { cwRecorder.stop('user'); return; }
+        if (!cwDecoder.active) return;
+        cwRecorder.start({
+            kind: recNoise ? 'noise' : 'signal',
+            rate: cwDecoder.rate,
+            audioRate: demodulator.audioRate,
+            carrierHz: state.tunedFreq,
+            source: source.label,
+            source_id: source.id,
+            center_freq: state.centerFreq,
+            cw_offset: state.cwOffset,
+            bandwidth: state.cwBandwidth,
+            model: modelStamp,
+        });
+        updateRecUi();
     }
     demodulator.setAgcSpeed(state.agcSpeed);
     demodulator.setCwBandwidth(state.cwBandwidth);
@@ -307,7 +351,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (useTx) return;
 
         const numComplex = nComplex == null ? (iq.length >> 1) : nComplex | 0;
-        audioPlayer.pushFloatAudio(demodulator.process(iq, numComplex));
+        const audio = demodulator.process(iq, numComplex);
+        cwRecorder.pushAudio(audio);
+        audioPlayer.pushFloatAudio(audio);
 
         for (let i = 0; i < numComplex; i++) {
             ringReal[ringHead] = iq[i * 2];
@@ -1235,6 +1281,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     const decoderClearBtn = document.getElementById('decoder-clear-btn');
     if (decoderClearBtn) decoderClearBtn.addEventListener('click', () => cwDecoder.clear());
+    if (recBtn) recBtn.addEventListener('click', toggleRec);
+    if (recNoiseBtn) recNoiseBtn.addEventListener('click', () => { recNoise = !recNoise; updateRecUi(); });
+    updateRecUi();
 
     // 5. Tuning Step Selector (also driven by the + / - keys)
     const stepSelect = document.getElementById('step-select');

@@ -1376,6 +1376,22 @@ kbd {
     border-color: var(--border-highlight);
 }
 
+.cwd-clear-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.cwd-noise-btn.active {
+    color: var(--accent-gold);
+    border-color: var(--accent-gold);
+}
+
+.cwd-rec-btn.recording {
+    color: #fff;
+    background: var(--accent-red);
+    border-color: var(--accent-red);
+}
+
 .cwd-status {
     font-family: var(--font-mono);
     font-size: 9px;

@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 require('./load.js');
-const { cwTokenClass, cwHighlightHtml, CWDecoder } = require('../../app/js/cw_decoder.js');
+const { cwTokenClass, cwHighlightHtml, cwConsumeText, CWDecoder } = require('../../app/js/cw_decoder.js');
 
 test('token classes: exchanges before keywords before callsigns', () => {
     assert.equal(cwTokenClass('5NN'), 'cwd-exch');
@@ -47,6 +47,38 @@ test('leaving CW shows STANDBY and returning restores the worker state', () => {
     assert.equal(status.textContent, 'STANDBY');
     dec.start(12000);
     assert.equal(status.textContent, 'DECODING');
+});
+
+test('consume text completes words and keeps the tail pending', () => {
+    assert.deepEqual(cwConsumeText('', 'CQ DE '), { words: ['CQ', 'DE'], pending: '' });
+    assert.deepEqual(cwConsumeText('W1', 'AW '), { words: ['W1AW'], pending: '' });
+    assert.deepEqual(cwConsumeText('', 'CQ'), { words: [], pending: 'CQ' });
+});
+
+test('tap copies samples without a view and drops the oldest held chunk', () => {
+    const posted = [];
+    const demod = { tapCallback: null };
+    const dec = new CWDecoder(demod, { output: null, status: null });
+    dec.worker = { postMessage(m) { posted.push({ i: Array.from(m.i), epoch: m.epoch }); } };
+    dec.active = true;
+    dec.chunkSamples = 4;
+    dec._tap(Float32Array.from([1, 2, 3, 4, 5]), Float32Array.from([6, 7, 8, 9, 10]), 5);
+    assert.equal(posted.length, 1);
+    assert.deepEqual(posted[0].i, [1, 2, 3, 4]);
+    assert.equal(dec.cur.i[0], 5);
+
+    dec.inFlight = 1;
+    dec.made = 8;
+    dec.pool = [];
+    dec.hold = [{ i: Float32Array.from([9, 9]), q: Float32Array.from([8, 8]) }];
+    dec.chunkSamples = 2;
+    dec.cur = null;
+    dec.fill = 0;
+    const before = posted.length;
+    dec._tap(Float32Array.from([1, 2, 3, 4]), Float32Array.from([5, 6, 7, 8]), 4);
+    assert.equal(posted.length, before);
+    assert.equal(dec.hold.length, 1);
+    assert.deepEqual(Array.from(dec.hold[0].i), [3, 4]);
 });
 
 test('greedy CTC collapses repeats, drops blanks, carries prev across chunks', () => {

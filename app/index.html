@@ -218,6 +218,8 @@
                     <span id="decoder-status" class="cwd-status cwd-status-off">OFF</span>
                 </div>
                 <div class="cwd-header-btns">
+                    <button id="decoder-noise-btn" class="cwd-clear-btn cwd-noise-btn" title="Next clip is a noise sample (noise_ prefix): tune an empty spot">NOISE</button>
+                    <button id="decoder-rec-btn" class="cwd-clear-btn cwd-rec-btn" title="Record the decoder input (IQ tap + audio + sidecar). Stops on retune, bandwidth or source change, 10 min max">REC</button>
                     <button id="decoder-clear-btn" class="cwd-clear-btn" title="Clear transcript">CLR</button>
                     <button id="decoder-close-btn" class="smeter-close-btn" title="Close Decoder">✕</button>
                 </div>
@@ -553,6 +555,7 @@
     <script src="js/audio_devices.js"></script>
     <script src="js/sources_controller.js"></script>
     <script src="js/cw_decoder.js"></script>
+    <script src="js/cw_recorder.js"></script>
     <script src="js/ws_reconnect.js"></script>
     <script src="js/connection.js"></script>
     <script src="js/sources.js"></script>

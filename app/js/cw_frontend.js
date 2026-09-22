@@ -8,7 +8,7 @@
  *     -> ln(|X| + 1e-6) minus an EMA of the per-frame median (noise floor)
  *
  * Runs inside cw_decoder_worker.js (importScripts) and in Node for tests. Needs `designLowpass`
- * (demodulator.js) and `DidahFFT` (fft.js) as globals. No allocations after construction.
+ * and `ComplexFIR` (demodulator.js) and `DidahFFT` (fft.js) as globals. No allocations after construction.
  */
 
 const CW_FRONTEND_SPEC = {
@@ -75,14 +75,13 @@ class CWFrontend {
         const N = kaiserNumTaps(S.decimAttenDb, S.decimTransitionHz, inRate);
         this.h = designLowpass(N, S.decimCutoffHz, inRate, S.decimAttenDb);
         this.N = N;
-        this.hI = new Float32Array(2 * N);
-        this.hQ = new Float32Array(2 * N);
-        this.hPos = 0;
+        this.decim = new ComplexFIR(this.h, false);
         this.phase = 0;
     }
 
     reset() {
-        this.hI.fill(0); this.hQ.fill(0); this.hPos = 0; this.phase = 0;
+        if (this.decim) this.decim.reset();
+        this.phase = 0;
         this.xI.fill(0); this.xQ.fill(0); this.xPos = 0; this.sinceFrame = 0; this.filled = 0;
         this.floor = 0.0; this.hasFloor = false;
         this.frameCount = 0;
@@ -93,30 +92,23 @@ class CWFrontend {
      * @param {Float32Array} iArr @param {Float32Array} qArr @param {number} n
      */
     process(iArr, qArr, n) {
-        const N = this.N, R = this.R, h = this.h, hI = this.hI, hQ = this.hQ;
-        let hPos = this.hPos, phase = this.phase, produced = 0;
+        const R = this.R;
+        let produced = 0;
         if (R === 1) {
             // Already at 800 Hz: no decimation filter (the Python reference skips it too)
             for (let k = 0; k < n; k++) produced += this._push800(iArr[k], qArr[k]);
             return produced;
         }
+        const fir = this.decim;
+        let phase = this.phase;
         for (let k = 0; k < n; k++) {
-            hI[hPos] = hI[hPos + N] = iArr[k];
-            hQ[hPos] = hQ[hPos + N] = qArr[k];
-            hPos = hPos === N - 1 ? 0 : hPos + 1;
+            fir.push(iArr[k], qArr[k]);
             if (phase === 0) {
-                // FIR output for the sample just pushed: y = sum h[m] * x[t - m]; newest is at hPos-1
-                let accI = 0.0, accQ = 0.0;
-                const base = hPos; // window [base, base+N) is oldest..newest; h symmetric so order is irrelevant
-                for (let m = 0; m < N; m++) {
-                    accI += h[m] * hI[base + m];
-                    accQ += h[m] * hQ[base + m];
-                }
-                produced += this._push800(accI, accQ);
+                fir.compute();
+                produced += this._push800(fir.outI, fir.outQ);
             }
             phase = phase === R - 1 ? 0 : phase + 1;
         }
-        this.hPos = hPos;
         this.phase = phase;
         return produced;
     }
@@ -166,12 +158,28 @@ class CWFrontend {
         return 1;
     }
 
-    /** Copy frames [from, to) into `dst` (Float32Array of (to-from)*bins). Frames older than capacity are gone. */
-    copyFrames(from, to, dst) {
+    /**
+     * Copy frames [from, to) into `dst` at frame offset `dstFrame`.
+     * The ring is walked in at most two contiguous runs (one more if the request
+     * is longer than the ring). No per-frame view.
+     */
+    copyFrames(from, to, dst, dstFrame = 0) {
         const bins = this.bins;
-        for (let k = from, d = 0; k < to; k++, d += bins) {
-            const s = (k % this.capacity) * bins;
-            dst.set(this.frames.subarray(s, s + bins), d);
+        const cap = this.capacity;
+        let left = to - from;
+        if (left <= 0) return;
+        const frames = this.frames;
+        let idx = from % cap;
+        if (idx < 0) idx += cap;
+        let dstOff = dstFrame * bins;
+        while (left > 0) {
+            const run = left < cap - idx ? left : cap - idx;
+            const src = idx * bins;
+            const count = run * bins;
+            dst.set(frames.subarray(src, src + count), dstOff);
+            dstOff += count;
+            left -= run;
+            idx = 0;
         }
     }
 }

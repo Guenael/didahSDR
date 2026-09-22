@@ -30,6 +30,16 @@ function escapeHtml(s) {
     return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 }
 
+/**
+ * Fold `chunk` onto the unfinished word. Completed words are `words` (an empty
+ * string is a repeated space). `pending` is the tail that may still grow.
+ */
+function cwConsumeText(pending, chunk) {
+    const parts = (pending + chunk).split(' ');
+    const next = parts.pop();
+    return { words: parts, pending: next };
+}
+
 /** Completed words become spans; the trailing partial word stays plain (it may still grow). */
 function cwHighlightHtml(text) {
     const parts = text.split(' ');
@@ -51,13 +61,21 @@ class CWDecoder {
         this.modelState = 'off';
         this.modelDetail = '';
         this.rate = 0;
-        this.text = '';
+        this.pending = '';
+        this.pendingEl = null;
+        this.len = 0;
         this.maxChars = 4000;
         this.chunkSamples = 0;
         this.pool = [];
+        this.hold = [];
         this.cur = null;
         this.fill = 0;
+        this.made = 0;
+        this.inFlight = 0;
+        this.epoch = 0;
         this.onTap = (i, q, n) => this._tap(i, q, n);
+        /** CWRecorder fed with the tap at the decoder rate; any reset ends its clip. */
+        this.recorder = null;
     }
 
     /** Nearest multiple of 800 (Kiwi reports e.g. 12001.2 Hz; the 0.01 % error is irrelevant). */
@@ -98,6 +116,7 @@ class CWDecoder {
         } else if (rate !== this.rate) {
             this.worker.postMessage({ type: 'rate', rate });
         }
+        if (this.worker) this.worker.postMessage({ type: 'run', on: true });
         this.rate = rate;
         this._setChunk(rate);
         this.active = true;
@@ -109,7 +128,9 @@ class CWDecoder {
 
     stop() {
         this.active = false;
+        if (this.recorder) this.recorder.stop('decoder off');
         if (this.demod.tapCallback === this.onTap) this.demod.tapCallback = null;
+        if (this.worker) this.worker.postMessage({ type: 'run', on: false });
         this._status(this.worker ? 'standby' : 'off');
     }
 
@@ -131,27 +152,55 @@ class CWDecoder {
 
     /** Drop the decoder state (retune, bandwidth or source change). Keeps the transcript. */
     reset() {
+        if (this.recorder) this.recorder.stop('reset');
         this.fill = 0;
         if (this._poly) this._poly.reset();
         if (this.worker) this.worker.postMessage({ type: 'reset' });
     }
 
     clear() {
-        this.text = '';
-        this._render();
+        this.pending = '';
+        this.pendingEl = null;
+        this.len = 0;
+        const el = this.els.output;
+        if (el) el.textContent = '';
     }
 
     // ---- internals ------------------------------------------------------------------------------
     _setChunk(rate) {
         this.chunkSamples = Math.round(rate * 0.2); // 200 ms per transfer
         this.pool = [];
+        this.hold = [];
         this.cur = null;
         this.fill = 0;
+        this.made = 0;
+        this.inFlight = 0;
+        this.epoch++;
     }
 
-    _buffer() {
+    /**
+     * A recycled buffer, or a new one until eight exist. After that the oldest
+     * chunk still waiting to be sent is dropped and its storage reused. If every
+     * buffer is in the worker, the caller drops the new samples.
+     */
+    _takeBuffer() {
         if (this.pool.length) return this.pool.pop();
-        return { i: new Float32Array(this.chunkSamples), q: new Float32Array(this.chunkSamples) };
+        if (this.made < 8) {
+            this.made++;
+            return { i: new Float32Array(this.chunkSamples), q: new Float32Array(this.chunkSamples) };
+        }
+        if (this.hold.length) return this.hold.shift();
+        return null;
+    }
+
+    _drain() {
+        if (this.inFlight || !this.hold.length || !this.worker) return;
+        const b = this.hold.shift();
+        this.inFlight = 1;
+        this.worker.postMessage(
+            { type: 'audio', i: b.i, q: b.q, n: this.chunkSamples, epoch: this.epoch },
+            [b.i.buffer, b.q.buffer]
+        );
     }
 
     _bindResampler(audioRate, plan) {
@@ -172,19 +221,30 @@ class CWDecoder {
             i = this._poly.outI;
             q = this._poly.outQ;
         }
+        if (this.recorder) this.recorder.pushTap(i, q, n);
         let p = 0;
+        const samples = this.chunkSamples;
         while (p < n) {
-            if (!this.cur) { this.cur = this._buffer(); this.fill = 0; }
-            const room = this.chunkSamples - this.fill;
-            const take = Math.min(room, n - p);
-            this.cur.i.set(i.subarray(p, p + take), this.fill);
-            this.cur.q.set(q.subarray(p, p + take), this.fill);
-            this.fill += take;
+            if (!this.cur) {
+                this.cur = this._takeBuffer();
+                this.fill = 0;
+                if (!this.cur) return;
+            }
+            const room = samples - this.fill;
+            const take = room < n - p ? room : n - p;
+            const dstI = this.cur.i;
+            const dstQ = this.cur.q;
+            const fill = this.fill;
+            for (let j = 0; j < take; j++) {
+                dstI[fill + j] = i[p + j];
+                dstQ[fill + j] = q[p + j];
+            }
+            this.fill = fill + take;
             p += take;
-            if (this.fill === this.chunkSamples) {
-                const b = this.cur;
+            if (this.fill === samples) {
+                this.hold.push(this.cur);
                 this.cur = null;
-                this.worker.postMessage({ type: 'audio', i: b.i, q: b.q, n: this.chunkSamples }, [b.i.buffer, b.q.buffer]);
+                this._drain();
             }
         }
     }
@@ -192,12 +252,14 @@ class CWDecoder {
     _onMessage(m) {
         switch (m.type) {
             case 'recycle':
-                if (m.i.length === this.chunkSamples && this.pool.length < 8) this.pool.push({ i: m.i, q: m.q });
+                if (m.epoch !== this.epoch) break;
+                this.inFlight = 0;
+                if (m.i && m.i.length === this.chunkSamples && this.pool.length < 8) this.pool.push({ i: m.i, q: m.q });
+                this._drain();
                 break;
             case 'text':
-                this.text += m.text;
-                if (this.text.length > this.maxChars) this.text = this.text.slice(-this.maxChars);
-                this._render();
+                if (this.recorder) this.recorder.pushText(m.text);
+                this._appendChunk(m.text || '');
                 break;
             case 'status':
                 this.modelState = m.state;
@@ -207,11 +269,62 @@ class CWDecoder {
         }
     }
 
-    _render() {
+    _appendChunk(chunk) {
+        if (!chunk) return;
         const el = this.els.output;
-        if (!el) return;
-        el.innerHTML = cwHighlightHtml(this.text);
+        if (!el || typeof document === 'undefined') return;
+        const step = cwConsumeText(this.pending, chunk);
+        this.pending = step.pending;
+        for (let w = 0; w < step.words.length; w++) this._commitWord(step.words[w]);
+        this._setPending(this.pending);
+        this.len += chunk.length;
+        this._trim();
         el.scrollTop = el.scrollHeight;
+    }
+
+    _ensurePending() {
+        const el = this.els.output;
+        if (this.pendingEl && this.pendingEl.parentNode === el) return;
+        const span = document.createElement('span');
+        span.className = 'cwd-pending';
+        el.appendChild(span);
+        this.pendingEl = span;
+    }
+
+    _commitWord(word) {
+        const el = this.els.output;
+        this._ensurePending();
+        if (word) {
+            const span = document.createElement('span');
+            span.className = cwTokenClass(word);
+            span.textContent = word;
+            el.insertBefore(span, this.pendingEl);
+        }
+        el.insertBefore(document.createTextNode(' '), this.pendingEl);
+    }
+
+    _setPending(tail) {
+        this._ensurePending();
+        this.pendingEl.textContent = tail;
+        this.pendingEl.className = 'cwd-pending';
+    }
+
+    _trim() {
+        const el = this.els.output;
+        while (this.len > this.maxChars && el.firstChild && el.firstChild !== this.pendingEl) {
+            const node = el.firstChild;
+            this.len -= node.textContent.length;
+            el.removeChild(node);
+        }
+        if (this.len > this.maxChars && this.pendingEl) {
+            const extra = this.len - this.maxChars;
+            const t = this.pendingEl.textContent;
+            if (extra < t.length) {
+                this.pending = t.slice(extra);
+                this.pendingEl.textContent = this.pending;
+                this.len = this.maxChars;
+            }
+        }
     }
 
     _status(state, detail) {
@@ -224,4 +337,4 @@ class CWDecoder {
     }
 }
 
-if (typeof module !== 'undefined') module.exports = { CWDecoder, cwTokenClass, cwHighlightHtml, CW_HIGHLIGHT };
+if (typeof module !== 'undefined') module.exports = { CWDecoder, cwTokenClass, cwHighlightHtml, cwConsumeText, CW_HIGHLIGHT };
