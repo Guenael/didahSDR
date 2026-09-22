@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadSampleWav, iqTone, peakAbs } = require('./load.js');
+const { loadSampleWav, floatIq, peakAbs } = require('./load.js');
 
 const RATE = 96000;
 
@@ -18,11 +18,12 @@ function keyedTone(offset, amp, onMs, offMs, seconds, noiseAmp) {
 }
 
 function runCollect(iq, chunk = 4800, everyChunk) {
+    const f = floatIq(iq);
     const d = new DidahDemodulator(RATE, 48000);
     d.setModulation('cw'); d.setOffsetFrequency(3000);
     const blocks = [];
-    for (let p = 0; p + chunk <= iq.length; p += chunk) {
-        const out = d.process(iq.subarray(p, p + chunk));
+    for (let p = 0; p + chunk <= f.length; p += chunk) {
+        const out = d.process(f.subarray(p, p + chunk));
         blocks.push(peakAbs(out));
         if (everyChunk) everyChunk(d, p / (RATE * 2));
     }
@@ -71,8 +72,9 @@ test('sample WAV: the strongest CW signal is levelled near the AGC target', { sk
     d.setModulation('cw'); d.setOffsetFrequency(offset);
     let pk = 0;
     const chunk = 4800;
-    for (let p = 0; p + chunk <= wav.data.length; p += chunk) {
-        const out = d.process(wav.data.subarray(p, p + chunk));
+    const wavF = floatIq(wav.data);
+    for (let p = 0; p + chunk <= wavF.length; p += chunk) {
+        const out = d.process(wavF.subarray(p, p + chunk));
         if (p > wav.rate * 2 * 2) pk = Math.max(pk, peakAbs(out));   // skip the first 2 s (floor settling)
     }
     assert.ok(pk >= 0.85 && pk <= 0.96, `strongest signal at ${offset.toFixed(0)} Hz: peak ${pk.toFixed(2)}, target 0.95`);

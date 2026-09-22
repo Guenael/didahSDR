@@ -117,8 +117,8 @@ class DidahAudioEngine {
     }
 
     /** Enqueue mono float samples. */
-    push(samples) {
-        const n = samples.length;
+    push(samples, count) {
+        const n = count == null ? samples.length : count;
         if (n === 0) return;
         const ring = this.ring, R = this.RING_SIZE;
         let w = this.writePos;
@@ -266,6 +266,11 @@ if (typeof registerProcessor !== 'undefined') {
         }
 
         onMessage(m) {
+            if (m && m.type === 'sab' && m.sab && typeof sabViews === 'function') {
+                this.sab = sabViews(m.sab);
+                this.sabScratch = new Float32Array(2048);
+                return;
+            }
             if (m instanceof Float32Array) {
                 if (!this.txState.wasTx) this.engine.push(m);
                 return;
@@ -338,6 +343,15 @@ if (typeof registerProcessor !== 'undefined') {
         }
 
         process(inputs, outputs) {
+            if (this.sab && !this.txState.wasTx) {
+                const scratch = this.sabScratch;
+                let n = sabRead(this.sab, scratch);
+                while (n > 0) {
+                    this.engine.push(scratch, n);
+                    if (n < scratch.length) break;
+                    n = sabRead(this.sab, scratch);
+                }
+            }
             const out = outputs[0][0];
             const peak = renderSidetoneOrRx(
                 this.txState, this.engine, this.keyer, out, sampleRate,

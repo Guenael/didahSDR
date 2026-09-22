@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-require('./load.js');
+const { floatIq } = require('./load.js');
 
 const RATE = 48000;
 
@@ -141,8 +141,9 @@ test('through the demodulator, squelch stays shut on band noise and opens on CW'
         return out;
     };
     const run = (d, iq) => {
+        const f = floatIq(iq);
         const chunk = 4800;
-        for (let p = 0; p + chunk <= iq.length; p += chunk) d.process(iq.subarray(p, p + chunk));
+        for (let p = 0; p + chunk <= f.length; p += chunk) d.process(f.subarray(p, p + chunk));
     };
 
     const quiet = new DidahDemodulator(IQ, 48000);

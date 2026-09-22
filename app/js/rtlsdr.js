@@ -754,6 +754,7 @@ class RtlSdrSource {
     }
 
     stop() {
+        this._gen = (this._gen | 0) + 1;
         this._wantStream = false;
         this._reading = false;
         this.streaming = false;
@@ -794,6 +795,7 @@ class RtlSdrSource {
             return false;
         }
         this._opening = (async () => {
+            const gen = this._gen | 0;
             let device;
             try {
                 device = await usb.requestDevice({ filters: RTL_USB_FILTERS });
@@ -815,11 +817,18 @@ class RtlSdrSource {
                 }
                 const tuner = new R820Tuner(com);
                 await tuner.open();
+                if ((this._gen | 0) !== gen) {
+                    try { await tuner.close(); } catch (err) { /* switched away */ }
+                    try { await com.release(); } catch (err) { /* switched away */ }
+                    try { await com.close(); } catch (err) { /* switched away */ }
+                    return false;
+                }
                 this._device = device;
                 this._com = com;
                 this._tuner = tuner;
                 this._front = 'tuner';
                 this.connected = true;
+                this._feedGen = gen;
                 await this._applyPpm();
                 await this._applySampleRate();
                 await this._applyGain();
@@ -879,7 +888,12 @@ class RtlSdrSource {
                     kick();
                     if (!src || src.length < 2 || !this.onRawIQ) return;
                     const ns = this._decimator.process(src, src.length, this._out);
-                    if (ns >= 2) this.onRawIQ(this._out.subarray(0, ns));
+                    if (ns >= 2) {
+                        if (!this._f32 || this._f32.length < ns) this._f32 = new Float32Array(ns);
+                        const scale = 1 / 32768;
+                        for (let i = 0; i < ns; i++) this._f32[i] = this._out[i] * scale;
+                        this.onRawIQ(this._f32, ns >> 1);
+                    }
                 }, fail);
             };
             kick();
@@ -997,6 +1011,7 @@ class RtlSdrSource {
         const nominal = rtlNominalHz(this.displayHz, this.upconverterHz);
         await rtlApplyCenter(this._port(), this.mode, nominal);
         if (seq !== this._tuneSeq) return;
+        if (this.onCenterApplied) this.onCenterApplied(this.displayHz);
     }
 
     _pushFrequency() {

@@ -109,7 +109,8 @@ class SoundcardSource {
         this.sourceNode = null;
         this.mute = null;
         this._starting = false;
-        this._watchingDevices = false;
+        this._gen = 0;
+        this._feedGen = 0;
     }
 
     setSwap(on) {
@@ -136,41 +137,16 @@ class SoundcardSource {
             return false;
         }
         stream.getTracks().forEach((t) => t.stop());
-        this._status('Listing sound-card devices (trying 96 / 48 / 192 kHz)…', false);
+        this._status('Listing sound-card inputs…', false);
         await this.refreshDevices();
-        if (!this._watchingDevices && navigator.mediaDevices.addEventListener) {
-            this._watchingDevices = true;
-            navigator.mediaDevices.addEventListener('devicechange', () => {
-                this.refreshDevices();
-            });
-        }
+        onAudioDevicesChanged(() => { this.refreshDevices(); });
         return true;
     }
 
     async refreshDevices() {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
-            this.devices = [];
-            if (this.onDevices) this.onDevices(this.devices);
-            return this.devices;
-        }
-        const all = await navigator.mediaDevices.enumerateDevices();
-        const inputs = all.filter((d) => d.kind === 'audioinput');
-        const listed = [];
-        for (let i = 0; i < inputs.length; i++) {
-            const d = inputs[i];
-            const probed = await this._probeDevice(d.deviceId);
-            listed.push({
-                id: d.deviceId,
-                label: d.label || `Audio input ${i + 1}`,
-                ok: probed.ok,
-                rate: probed.rate,
-                channels: probed.channels,
-                native: probed.native
-            });
-        }
-        this.devices = listed;
-        if (this.onDevices) this.onDevices(listed);
-        return listed;
+        this.devices = await listAudioInputs();
+        if (this.onDevices) this.onDevices(this.devices);
+        return this.devices;
     }
 
     _gum(deviceId, extra) {
@@ -191,96 +167,13 @@ class SoundcardSource {
         };
     }
 
-    async _tryContextRate(want) {
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        if (!AudioCtx) return 0;
-        let ctx;
-        try {
-            ctx = new AudioCtx({ sampleRate: want });
-        } catch (e) {
-            try { ctx = new AudioCtx(); } catch (e2) { return 0; }
-        }
-        const sr = Math.round(ctx.sampleRate);
-        try { await ctx.close(); } catch (e) { /* ignore */ }
-        return isSoundRate(sr) ? sr : 0;
-    }
-
-    /**
-     * Ask for 96, then 48, then 192 kHz. Chrome on Linux often ignores the constraint and
-     * reports 44.1 kHz; in that case we still accept the device if an AudioContext can run
-     * at an allowed rate (the context resamples).
-     */
-    async _probeDevice(deviceId) {
-        if (!deviceId) return { ok: false, rate: 0, channels: 1, native: 0, rates: [] };
-        const working = [];
-        let channels = 1;
-        let native = 0;
-
-        for (let i = 0; i < PREFERRED_RATES.length; i++) {
-            const rate = PREFERRED_RATES[i];
-            let stream;
-            try {
-                stream = await this._gum(deviceId, { sampleRate: { exact: rate } });
-            } catch (e) {
-                continue;
-            }
-            try {
-                const info = this._readTrack(stream);
-                channels = Math.max(channels, info.channels);
-                if (!native) native = info.sampleRate;
-                const got = info.sampleRate || rate;
-                if (isSoundRate(got)) working.push(got);
-            } finally {
-                stream.getTracks().forEach((t) => t.stop());
-            }
-            if (working.length) break;
-        }
-
-        if (!working.length) {
-            let stream;
-            try {
-                stream = await this._gum(deviceId, { sampleRate: { ideal: 96000 } });
-            } catch (e) {
-                try {
-                    stream = await this._gum(deviceId, {});
-                } catch (e2) {
-                    return { ok: false, rate: 0, channels, native, rates: [] };
-                }
-            }
-            try {
-                const info = this._readTrack(stream);
-                channels = Math.max(channels, info.channels);
-                native = info.sampleRate || native;
-                const track = stream.getAudioTracks()[0];
-                const classified = track ? trackCaptureInfo(track) : { ok: false, rate: 0, channels };
-                channels = Math.max(channels, classified.channels);
-                if (classified.ok && classified.rate) working.push(classified.rate);
-            } finally {
-                stream.getTracks().forEach((t) => t.stop());
-            }
-        }
-
-        if (!working.length) {
-            for (let i = 0; i < PREFERRED_RATES.length; i++) {
-                const sr = await this._tryContextRate(PREFERRED_RATES[i]);
-                if (sr) {
-                    working.push(sr);
-                    break;
-                }
-            }
-        }
-
-        const rate = preferredCaptureRate(working);
-        // Chrome/Linux often reports channelCount 1 on stereo Pulse devices; still allow IQ.
-        const stereoOk = channels >= 2 || (rate > 0 && native > 0);
-        return { ok: stereoOk && rate > 0, rate, channels: Math.max(channels, stereoOk ? 2 : 1), native, rates: working };
-    }
-
     async start(deviceId) {
         if (this._starting) return;
         this._starting = true;
+        const gen = ++this._gen;
         try {
-            await this.stop();
+            await this._shutdown();
+            if (gen !== this._gen) return;
             if (!deviceId) {
                 this._status('Select a sound-card device.', false);
                 return;
@@ -339,22 +232,35 @@ class SoundcardSource {
                 return;
             }
 
-            await ctx.audioWorklet.addModule('js/soundcard_capture_worklet.js');
+            if (gen !== this._gen) {
+                stream.getTracks().forEach((t) => t.stop());
+                try { await ctx.close(); } catch (e) { /* switched away */ }
+                return;
+            }
+            const trackInfo = this._readTrack(stream);
+            await ctx.audioWorklet.addModule('js/audio_capture_worklet.js');
+            if (gen !== this._gen) {
+                stream.getTracks().forEach((t) => t.stop());
+                try { await ctx.close(); } catch (e) { /* switched away */ }
+                return;
+            }
             const sourceNode = ctx.createMediaStreamSource(stream);
             sourceNode.channelCount = 2;
             sourceNode.channelCountMode = 'explicit';
             sourceNode.channelInterpretation = 'speakers';
-            const node = new AudioWorkletNode(ctx, 'soundcard-capture', {
+            const node = new AudioWorkletNode(ctx, 'audio-capture', {
                 numberOfInputs: 1,
                 numberOfOutputs: 1,
                 outputChannelCount: [1],
                 channelCount: 2,
-                channelCountMode: 'explicit'
+                channelCountMode: 'explicit',
+                processorOptions: { mode: 'stereo-iq', swap: this.swap }
             });
             node.port.onmessage = (e) => {
                 const m = e.data;
                 if (!m || m.type !== 'iq' || !m.samples) return;
-                if (this.onRawIQ) this.onRawIQ(m.samples);
+                if (gen !== this._gen) return;
+                if (this.onRawIQ) this.onRawIQ(m.samples, m.n || (m.samples.length >> 1));
                 node.port.postMessage({ type: 'recycle', samples: m.samples }, [m.samples.buffer]);
             };
             node.port.postMessage({ type: 'swap', on: this.swap });
@@ -372,12 +278,16 @@ class SoundcardSource {
             this.mute = mute;
             this.deviceId = deviceId;
             this.sampleRate = ctx.sampleRate;
+            this._feedGen = gen;
             this.connected = true;
             const openedId = settings.deviceId || '';
             const chromeHint = (openedId && openedId !== deviceId)
                 ? ' Chrome may be using another mic — in pavucontrol → Recording, route this tab to didahSDR_IQ.'
                 : '';
-            this._status('Sound card IQ · ' + (this.sampleRate / 1000) + ' kHz.' + chromeHint, true);
+            const monoWarn = trackInfo.channels < 2
+                ? ' Mono input: I/Q wants stereo (left = I, right = Q).'
+                : '';
+            this._status('Sound card IQ · ' + (this.sampleRate / 1000) + ' kHz.' + monoWarn + chromeHint, true);
             if (this.onReady) this.onReady({ sampleRate: this.sampleRate, centerFreq: 0, deviceId });
         } catch (e) {
             this._status((e && e.message) ? e.message : 'Sound card open failed.', false);
@@ -388,7 +298,12 @@ class SoundcardSource {
     }
 
     async stop() {
+        this._gen++;
         this.connected = false;
+        await this._shutdown();
+    }
+
+    async _shutdown() {
         if (this.node) {
             try { this.node.disconnect(); } catch (e) { /* already gone */ }
             this.node = null;

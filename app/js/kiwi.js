@@ -192,10 +192,7 @@ class KiwiConnection {
      */
     disconnect(keepWanted = false) {
         if (!keepWanted) this._wantConnect = false;
-        if (this.reconnectTimer) {
-            clearTimeout(this.reconnectTimer);
-            this.reconnectTimer = null;
-        }
+        clearReconnectTimer(this);
         this._stopKeepalive();
         if (this.ws) {
             this.ws.onclose = null;
@@ -221,17 +218,17 @@ class KiwiConnection {
             if (key === this._lastTuneKey) return;
             this._lastTuneKey = key;
             this._sendMod(this.ddcHz);
+            if (this.onCenterApplied) this.onCenterApplied(Math.round(this.ddcHz));
         };
         if (typeof requestAnimationFrame === 'function') requestAnimationFrame(send);
         else send();
     }
 
     _scheduleReconnect() {
-        if (!this._wantConnect || this.reconnectTimer) return;
-        this.reconnectTimer = setTimeout(() => {
-            this.reconnectTimer = null;
+        if (!this._wantConnect) return;
+        armReconnect(this, this.reconnectInterval, () => {
             if (this._wantConnect) this.connect();
-        }, this.reconnectInterval);
+        });
     }
 
     _send(text) {
@@ -262,7 +259,13 @@ class KiwiConnection {
         else if (tag === 'SND' && this.onRawIQ) {
             const unpacked = unpackKiwiSndIq(bytes, this.iqBuf);
             this.iqBuf = unpacked.iq;
-            if (unpacked.iq.length) this.onRawIQ(unpacked.iq);
+            const n = unpacked.iq.length;
+            if (n) {
+                if (!this.f32 || this.f32.length !== n) this.f32 = new Float32Array(n);
+                const scale = 1 / 32768;
+                for (let i = 0; i < n; i++) this.f32[i] = unpacked.iq[i] * scale;
+                this.onRawIQ(this.f32, n >> 1);
+            }
         }
     }
 

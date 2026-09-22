@@ -1,13 +1,14 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { iqTone, audioPeak } = require('./load.js');
+const { iqTone, floatIq, audioPeak } = require('./load.js');
 
 const RATE = 96000, AUDIO = 12000;
 
 function run(demod, iq, chunk = 4800) {
+    const f = floatIq(iq);
     const parts = [];
-    for (let p = 0; p + chunk <= iq.length; p += chunk) parts.push(Float32Array.from(demod.process(iq.subarray(p, p + chunk))));
+    for (let p = 0; p + chunk <= f.length; p += chunk) parts.push(Float32Array.from(demod.process(f.subarray(p, p + chunk))));
     const out = new Float32Array(parts.reduce((s, a) => s + a.length, 0));
     let o = 0; for (const a of parts) { out.set(a, o); o += a.length; }
     return out;
@@ -47,7 +48,7 @@ test('LSB: tone 1 kHz below the carrier is heard at 1 kHz', () => {
 test('output buffer is reused and is the complex input length divided by 8', () => {
     const d = new DidahDemodulator(RATE, AUDIO);
     assert.equal(d.channel.N, 129);
-    const iq = iqTone(1000, RATE, 2400, 0.1);
+    const iq = floatIq(iqTone(1000, RATE, 2400, 0.1));
     const a = d.process(iq), b = d.process(iq);
     assert.equal(a.length, 300);
     assert.equal(b.length, 300);
@@ -69,7 +70,7 @@ test('setIqRate(12000) skips the halfband and still puts a CW tone at the BFO pi
     assert.equal(d.decimate2, true);
     assert.equal(d.decim, 8);
     assert.equal(d.audioRate, 12000);
-    const iq = iqTone(1000, RATE, 2400, 0.1);
+    const iq = floatIq(iqTone(1000, RATE, 2400, 0.1));
     assert.equal(d.process(iq).length, 300);
 });
 

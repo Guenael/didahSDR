@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const { req } = require('./load.js');
 
 const {
-    encodeFreqBcd, decodeFreqBcd, civCommand, civSetFrequency, civSetMode, classifyCivFrame, CivParser, Ic7300Cat
+    encodeFreqBcd, decodeFreqBcd, civCommand, civSetFrequency, civSetMode,
+    civSetKeySpeed, civSendCw, civKeySpeedValue, classifyCivFrame, CivParser, Ic7300Cat
 } = req('civ.js');
 const {
     IC7300_IF_HZ, IC7300_CW_TRACE_HZ, IC7300_CW_PITCH_HZ, IC7300_OUT_RATE, IC7300_SSB_SPAN_HZ,
@@ -146,7 +147,7 @@ test('48/96/192 kHz contexts emit 12 kHz; 44.1 kHz scales the pitch', () => {
 });
 
 function convertReal(conv, freq, rate, n) {
-    const iq = new Int16Array(Math.ceil(n / conv.decim) * 2 + 8);
+    const iq = new Float32Array(Math.ceil(n / conv.decim) * 2 + 8);
     let fill = 0;
     const w = (2 * Math.PI * freq) / rate;
     for (let i = 0; i < n; i++) {
@@ -163,8 +164,8 @@ function complexPeak(iq, rate) {
     const complex = iq.length / 2;
     const start = complex - fftSize;
     for (let i = 0; i < fftSize; i++) {
-        re[i] = iq[(start + i) * 2] / 32767;
-        im[i] = iq[(start + i) * 2 + 1] / 32767;
+        re[i] = iq[(start + i) * 2];
+        im[i] = iq[(start + i) * 2 + 1];
     }
     const spec = fft.computeSpectrumDb(re, im);
     const bin = Math.round((1000 / rate) * fftSize);
@@ -200,6 +201,20 @@ test('set-frequency and set-mode frames', () => {
     assert.equal(didahToCivMode('lsb'), 0x00);
     assert.equal(didahToCivMode('usb'), 0x01);
     assert.equal(didahToCivMode('cw'), 0x03);
+
+    const speed = civSetKeySpeed(20);
+    assert.equal(speed[4], 0x14);
+    assert.equal(speed[5], 0x0C);
+    assert.equal(speed[speed.length - 1], 0xFD);
+    assert.equal(civKeySpeedValue(6), 0);
+    assert.equal(civKeySpeedValue(48), 255);
+    const cw = civSendCw('CQ');
+    assert.equal(cw[4], 0x17);
+    assert.equal(cw[5], 0x43);
+    assert.equal(cw[6], 0x51);
+    assert.equal(cw[7], 0xFD);
+    assert.equal(civSendCw(''), null);
+    assert.equal(civSendCw('x'.repeat(40)).length, 36);
 });
 
 test('SSB view covers about 4 kHz of the sideband; CW stays on the trace', () => {

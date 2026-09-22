@@ -53,6 +53,33 @@ function civSetFrequency(hz) {
     return frame;
 }
 
+/** Keyer speed 0x14 0x0C: WPM 6 → 0, WPM 48 → 255, two-byte BCD. */
+function civKeySpeedValue(wpm) {
+    const w = Math.max(6, Math.min(48, Math.round(Number(wpm) || 6)));
+    return Math.round((w - 6) * 255 / 42);
+}
+
+function civSetKeySpeed(wpm) {
+    const n = civKeySpeedValue(wpm);
+    const digits = String(n).padStart(4, '0');
+    const lo = parseInt(digits.slice(2, 4), 16);
+    const hi = parseInt(digits.slice(0, 2), 16);
+    return new Uint8Array([
+        0xFE, 0xFE, CIV_ADDR_IC7300, CIV_ADDR_CONTROLLER, 0x14, 0x0C, lo, hi, 0xFD
+    ]);
+}
+
+/** Send CW memory text (0x17). At most 30 ASCII characters. Empty text is not a frame. */
+function civSendCw(text) {
+    const s = String(text || '').replace(/[^\x20-\x7E]/g, '').slice(0, 30);
+    if (!s) return null;
+    const frame = new Uint8Array(6 + s.length);
+    frame.set([0xFE, 0xFE, CIV_ADDR_IC7300, CIV_ADDR_CONTROLLER, 0x17], 0);
+    for (let i = 0; i < s.length; i++) frame[5 + i] = s.charCodeAt(i) & 0x7f;
+    frame[frame.length - 1] = 0xFD;
+    return frame;
+}
+
 /** Set operating mode (0x06) plus filter number (1–3). */
 function civSetMode(mode, filter) {
     const fil = Math.max(1, Math.min(3, filter || 1));
@@ -167,6 +194,19 @@ class Ic7300Cat {
     setMode(mode, filter) {
         if (!this.connected) return;
         this._write(civSetMode(mode, filter));
+    }
+
+    setKeySpeed(wpm) {
+        if (!this.connected) return;
+        this._write(civSetKeySpeed(wpm));
+    }
+
+    sendCw(text) {
+        if (!this.connected) return false;
+        const frame = civSendCw(text);
+        if (!frame) return false;
+        this._write(frame);
+        return true;
     }
 
     async connect() {
@@ -348,6 +388,9 @@ if (typeof globalThis !== 'undefined') {
     globalThis.civCommand = civCommand;
     globalThis.civSetFrequency = civSetFrequency;
     globalThis.civSetMode = civSetMode;
+    globalThis.civSetKeySpeed = civSetKeySpeed;
+    globalThis.civSendCw = civSendCw;
+    globalThis.civKeySpeedValue = civKeySpeedValue;
     globalThis.classifyCivFrame = classifyCivFrame;
     globalThis.CivParser = CivParser;
     globalThis.Ic7300Cat = Ic7300Cat;
@@ -355,6 +398,7 @@ if (typeof globalThis !== 'undefined') {
 if (typeof module !== 'undefined') {
     module.exports = {
         CIV_ADDR_IC7300, CIV_ADDR_CONTROLLER, CIV_BAUD_DEFAULT, CIV_BAUDS,
-        encodeFreqBcd, decodeFreqBcd, civCommand, civSetFrequency, civSetMode, classifyCivFrame, CivParser, Ic7300Cat
+        encodeFreqBcd, decodeFreqBcd, civCommand, civSetFrequency, civSetMode,
+        civSetKeySpeed, civSendCw, civKeySpeedValue, classifyCivFrame, CivParser, Ic7300Cat
     };
 }

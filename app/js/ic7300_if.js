@@ -120,8 +120,8 @@ function ic7300Zoom(sampleRate, maxZoom) {
 /**
  * Real sample → complex baseband centred on the 12 kHz IF.
  * Halfband cascade from demodulator.js. No allocations after construction.
- * `push` writes one interleaved Int16 pair at `dst[2*fill]` and returns true
- * when a decimated sample was produced.
+ * `push` writes one interleaved float pair (±1) at `dst[2*fill]` and returns
+ * true when a decimated sample was produced.
  */
 class RealIfConverter {
     constructor(contextRate) {
@@ -204,15 +204,9 @@ class RealIfConverter {
             q = hb.outQ;
         }
 
-        let ii = i * 32767;
-        let qq = q * 32767;
-        if (ii > 32767) ii = 32767;
-        else if (ii < -32768) ii = -32768;
-        if (qq > 32767) qq = 32767;
-        else if (qq < -32768) qq = -32768;
         const o = fill * 2;
-        dst[o] = ii;
-        dst[o + 1] = qq;
+        dst[o] = i;
+        dst[o + 1] = q;
         return true;
     }
 }

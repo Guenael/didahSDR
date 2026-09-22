@@ -352,12 +352,13 @@ class DidahDemodulator {
     }
 
     /**
-     * Demodulates interleaved 16-bit complex IQ into float audio at `this.audioRate`.
-     * @param {Int16Array} int16IQ - Interleaved [I0, Q0, I1, Q1, ...]
+     * Demodulates interleaved float IQ (±1) into audio at `this.audioRate`.
+     * @param {Float32Array} iq - Interleaved [I0, Q0, I1, Q1, ...]
+     * @param {number} [nComplex] - complex sample count; defaults to iq.length / 2
      * @returns {Float32Array} Mono audio. Internal buffer: valid until the next call.
      */
-    process(int16IQ) {
-        const numComplex = int16IQ.length / 2;
+    process(iq, nComplex) {
+        const numComplex = nComplex == null ? (iq.length >> 1) : nComplex | 0;
         const decim = this.decim;
         const maxOut = Math.ceil(numComplex / decim) + 1;
         if (this.audioOut.length < maxOut) {
@@ -376,7 +377,6 @@ class DidahDemodulator {
         const ncoStepS = this.ncoStepS;
         const bfoStepC = this.bfoStepC;
         const bfoStepS = this.bfoStepS;
-        const inv32768 = 1.0 / 32768.0;
         let ncoC = this.ncoC;
         let ncoS = this.ncoS;
         let bfoC = this.bfoC;
@@ -385,8 +385,8 @@ class DidahDemodulator {
 
         for (let n = 0; n < numComplex; n++) {
             const idx = n * 2;
-            const i = int16IQ[idx] * inv32768;
-            const q = int16IQ[idx + 1] * inv32768;
+            const i = iq[idx];
+            const q = iq[idx + 1];
             const si0 = i * ncoC - q * ncoS;
             const sq0 = i * ncoS + q * ncoC;
             const nc = ncoC * ncoStepC - ncoS * ncoStepS;

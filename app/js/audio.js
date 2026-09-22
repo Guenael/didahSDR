@@ -62,7 +62,8 @@ class WebAudioPlayer {
 
         this.ctx.onstatechange = () => this.emitState();
 
-        this.initPromise = this.ctx.audioWorklet.addModule('js/resampler.js')
+        this.initPromise = this.ctx.audioWorklet.addModule('js/audio_ring.js')
+            .then(() => this.ctx.audioWorklet.addModule('js/resampler.js'))
             .then(() => this.ctx.audioWorklet.addModule('js/cw_keyer.js'))
             .then(() => this.ctx.audioWorklet.addModule('js/audio_worklet.js'))
             .then(() => {
@@ -72,6 +73,16 @@ class WebAudioPlayer {
                     processorOptions: { inputRate: this.INPUT_RATE }
                 });
                 this.node.port.onmessage = (e) => this.handleWorkletMessage(e.data);
+                this._sab = null;
+                const isolated = typeof crossOriginIsolated === 'undefined' || crossOriginIsolated;
+                if (isolated && typeof SharedArrayBuffer !== 'undefined' && typeof createSabRing === 'function') {
+                    try {
+                        this._sab = createSabRing();
+                        this.node.port.postMessage({ type: 'sab', sab: this._sab.sab });
+                    } catch (e) {
+                        this._sab = null;
+                    }
+                }
                 this.node.connect(this.gainNode);
                 if (this.debug) this.node.port.postMessage({ type: 'debug', on: true });
                 this.ready = true;
@@ -152,6 +163,10 @@ class WebAudioPlayer {
         if (!this.initPromise) this.init();
         if (!this.ready || !this.ctx || this.ctx.state !== 'running') return;
         if (floatArray.length === 0) return;
+        if (this._sab) {
+            sabWrite(this._sab, floatArray);
+            return;
+        }
         const copy = new Float32Array(floatArray);
         this.node.port.postMessage(copy, [copy.buffer]);
     }

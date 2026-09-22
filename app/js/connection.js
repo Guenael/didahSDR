@@ -82,10 +82,7 @@ class DidahConnection {
     }
 
     disconnect() {
-        if (this.reconnectTimer) {
-            clearTimeout(this.reconnectTimer);
-            this.reconnectTimer = null;
-        }
+        clearReconnectTimer(this);
         if (this.ws) {
             this.ws.onclose = null;
             this.ws.close();
@@ -97,11 +94,7 @@ class DidahConnection {
     }
 
     scheduleReconnect() {
-        if (this.reconnectTimer) return;
-        this.reconnectTimer = setTimeout(() => {
-            this.reconnectTimer = null;
-            this.connect();
-        }, this.reconnectInterval);
+        armReconnect(this, this.reconnectInterval, () => this.connect());
     }
 
     notifyStatus(msg, isConnected) {
@@ -138,7 +131,11 @@ class DidahConnection {
             const payloadBytes = buffer.byteLength - 1;
             if (this.iqBuf.byteLength !== payloadBytes) this.iqBuf = new Int16Array(payloadBytes >> 1);
             new Uint8Array(this.iqBuf.buffer).set(new Uint8Array(buffer, 1, payloadBytes & ~1));
-            this.onRawIQ(this.iqBuf);
+            const n = this.iqBuf.length;
+            if (!this.f32 || this.f32.length !== n) this.f32 = new Float32Array(n);
+            const scale = 1 / 32768;
+            for (let i = 0; i < n; i++) this.f32[i] = this.iqBuf[i] * scale;
+            this.onRawIQ(this.f32, n >> 1);
         }
     }
 

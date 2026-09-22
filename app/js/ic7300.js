@@ -38,7 +38,8 @@ class Ic7300Source {
         this.sourceNode = null;
         this.mute = null;
         this._starting = false;
-        this._watchingDevices = false;
+        this._gen = 0;
+        this._feedGen = 0;
 
         this.cat = new Ic7300Cat({
             onFrequency: (hz) => { if (this.onFrequency) this.onFrequency(hz); },
@@ -78,6 +79,14 @@ class Ic7300Source {
         this.cat.setMode(mode, filter);
     }
 
+    setCwSpeed(wpm) {
+        this.cat.setKeySpeed(wpm);
+    }
+
+    sendCw(text) {
+        return this.cat.sendCw(text);
+    }
+
     setLines(keyDown, sendHeld) {
         return this.cat.setLines(keyDown, sendHeld);
     }
@@ -103,39 +112,14 @@ class Ic7300Source {
         stream.getTracks().forEach((t) => t.stop());
         this._status('Listing audio inputs (48 kHz)…', false);
         await this.refreshDevices();
-        if (!this._watchingDevices && navigator.mediaDevices.addEventListener) {
-            this._watchingDevices = true;
-            navigator.mediaDevices.addEventListener('devicechange', () => {
-                this.refreshDevices();
-            });
-        }
+        onAudioDevicesChanged(() => { this.refreshDevices(); });
         return true;
     }
 
     async refreshDevices() {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
-            this.devices = [];
-            if (this.onDevices) this.onDevices(this.devices);
-            return this.devices;
-        }
-        const all = await navigator.mediaDevices.enumerateDevices();
-        const inputs = all.filter((d) => d.kind === 'audioinput');
-        const listed = [];
-        for (let i = 0; i < inputs.length; i++) {
-            const d = inputs[i];
-            const probed = await this._probeDevice(d.deviceId);
-            listed.push({
-                id: d.deviceId,
-                label: d.label || `Audio input ${i + 1}`,
-                ok: probed.ok,
-                rate: probed.rate,
-                channels: probed.channels,
-                native: probed.native
-            });
-        }
-        this.devices = listed;
-        if (this.onDevices) this.onDevices(listed);
-        return listed;
+        this.devices = await listAudioInputs();
+        if (this.onDevices) this.onDevices(this.devices);
+        return this.devices;
     }
 
     _gum(deviceId, extra) {
@@ -145,34 +129,13 @@ class Ic7300Source {
         return navigator.mediaDevices.getUserMedia({ audio });
     }
 
-    async _probeDevice(deviceId) {
-        if (!deviceId) return { ok: false, rate: 0, channels: 1, native: 0 };
-        let stream;
-        try {
-            stream = await this._gum(deviceId, { sampleRate: { ideal: IC7300_NATIVE_RATE } });
-        } catch (e) {
-            try {
-                stream = await this._gum(deviceId, {});
-            } catch (e2) {
-                return { ok: false, rate: 0, channels: 1, native: 0 };
-            }
-        }
-        try {
-            const track = stream.getAudioTracks()[0];
-            const set = (track && track.getSettings && track.getSettings()) || {};
-            const native = Math.round(Number(set.sampleRate) || 0);
-            const channels = Math.round(Number(set.channelCount) || 1);
-            return { ok: true, rate: native || IC7300_NATIVE_RATE, channels, native };
-        } finally {
-            stream.getTracks().forEach((t) => t.stop());
-        }
-    }
-
     async start(deviceId) {
         if (this._starting) return;
         this._starting = true;
+        const gen = ++this._gen;
         try {
-            await this.stop();
+            await this._shutdown();
+            if (gen !== this._gen) return;
             if (!deviceId) {
                 this._status('Select the IC-7300 audio input.', false);
                 return;
@@ -206,11 +169,22 @@ class Ic7300Source {
                 return;
             }
 
+            if (gen !== this._gen) {
+                stream.getTracks().forEach((t) => t.stop());
+                try { await ctx.close(); } catch (err) { /* switched away */ }
+                return;
+            }
             await ctx.audioWorklet.addModule('js/demodulator.js');
             await ctx.audioWorklet.addModule('js/ic7300_if.js');
-            await ctx.audioWorklet.addModule('js/ic7300_capture_worklet.js');
+            await ctx.audioWorklet.addModule('js/audio_capture_worklet.js');
+            if (gen !== this._gen) {
+                stream.getTracks().forEach((t) => t.stop());
+                try { await ctx.close(); } catch (err) { /* switched away */ }
+                return;
+            }
             const sourceNode = ctx.createMediaStreamSource(stream);
-            const node = new AudioWorkletNode(ctx, 'ic7300-capture', {
+            const node = new AudioWorkletNode(ctx, 'audio-capture', {
+                processorOptions: { mode: 'real-if' },
                 numberOfInputs: 1,
                 numberOfOutputs: 1,
                 outputChannelCount: [1],
@@ -221,7 +195,8 @@ class Ic7300Source {
             node.port.onmessage = (e) => {
                 const m = e.data;
                 if (!m || m.type !== 'iq' || !m.samples) return;
-                if (this.onRawIQ) this.onRawIQ(m.samples);
+                if (gen !== this._gen) return;
+                if (this.onRawIQ) this.onRawIQ(m.samples, m.n || (m.samples.length >> 1));
                 node.port.postMessage({ type: 'recycle', samples: m.samples }, [m.samples.buffer]);
             };
 
@@ -235,6 +210,7 @@ class Ic7300Source {
             this.mute = mute;
             this.deviceId = deviceId;
             this.sampleRate = plan.outRate;
+            this._feedGen = gen;
             this.connected = true;
             const trackTxt = this.trackRate ? (this.trackRate / 1000) + ' kHz' : 'unknown';
             this._status(
@@ -265,7 +241,12 @@ class Ic7300Source {
     }
 
     async stop() {
+        this._gen++;
         this.connected = false;
+        await this._shutdown();
+    }
+
+    async _shutdown() {
         if (this.node) {
             try { this.node.disconnect(); } catch (e) { /* already gone */ }
             this.node = null;
