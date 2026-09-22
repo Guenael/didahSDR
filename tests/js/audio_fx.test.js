@@ -32,12 +32,12 @@ function keyedSine(freq, rate, n, amp, onMs, offMs) {
 test('disabled FX stages are identity', () => {
     const src = sine(700, RATE, 2048, 0.3);
     const a = Float32Array.from(src);
-    const n = new DidahAutoNotch();
+    const n = new DidahAutoNotch(RATE);
     n.process(a, a.length);
     assert.deepEqual(Array.from(a), Array.from(src));
 
     const b = Float32Array.from(src);
-    const nr = new DidahNoiseReduction();
+    const nr = new DidahNoiseReduction(RATE);
     nr.process(b, b.length);
     assert.deepEqual(Array.from(b), Array.from(src));
 
@@ -49,7 +49,7 @@ test('disabled FX stages are identity', () => {
 });
 
 test('autonotch attenuates a continuous tone', () => {
-    const n = new DidahAutoNotch();
+    const n = new DidahAutoNotch(RATE);
     n.setEnabled(true);
     n.setDepth(100);
     const buf = sine(700, RATE, RATE, 0.2);
@@ -62,11 +62,11 @@ test('autonotch attenuates a continuous tone', () => {
 test('autonotch suppresses a steady interferer more than a short keyed burst', () => {
     const cont = sine(700, RATE, RATE, 0.2);
     const keyed = keyedSine(700, RATE, RATE, 0.2, 50, 200);
-    const n1 = new DidahAutoNotch();
+    const n1 = new DidahAutoNotch(RATE);
     n1.setEnabled(true);
     n1.setDepth(100);
     n1.process(cont, cont.length);
-    const n2 = new DidahAutoNotch();
+    const n2 = new DidahAutoNotch(RATE);
     n2.setEnabled(true);
     n2.setDepth(100);
     n2.process(keyed, keyed.length);
@@ -83,7 +83,7 @@ test('NR reduces white noise more than a tone and reuses the buffer', () => {
     const noise = new Float32Array(RATE);
     for (let i = 0; i < noise.length; i++) noise[i] = 0.15 * (Math.random() * 2 - 1);
     const noiseIn = rms(noise, RATE / 2, RATE);
-    const nrN = new DidahNoiseReduction();
+    const nrN = new DidahNoiseReduction(RATE);
     nrN.setEnabled(true);
     nrN.setStrength(100);
     const same = noise;
@@ -94,7 +94,7 @@ test('NR reduces white noise more than a tone and reuses the buffer', () => {
 
     const tone = sine(700, RATE, RATE, 0.2);
     const toneIn = rms(tone, RATE / 2, RATE);
-    const nrT = new DidahNoiseReduction();
+    const nrT = new DidahNoiseReduction(RATE);
     nrT.setEnabled(true);
     nrT.setStrength(100);
     nrT.process(tone, tone.length);
@@ -181,4 +181,48 @@ test('squelch hang keeps the gate open through a 200 ms CW gap', () => {
     const longGap = new Float32Array(Math.round(RATE * 0.55));
     sq.observe(longGap, longGap.length, floor);
     assert.equal(sq.open, false, 'closed after a 550 ms gap');
+});
+
+test('NR at 12 kHz drops channel-filtered noise by at least 3 dB', () => {
+    const rate = 12000;
+    const { designLowpass } = require('../../app/js/demodulator.js');
+    const h = designLowpass(129, 150, rate, 60);
+    const n = rate * 2;
+    const raw = new Float32Array(n + h.length);
+    let s = 10007;
+    for (let i = 0; i < raw.length; i++) {
+        s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+        raw[i] = ((s / 4294967296) * 2 - 1) * 0.2;
+    }
+    const noise = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+        let y = 0;
+        for (let k = 0; k < h.length; k++) y += h[k] * raw[i + k];
+        noise[i] = y;
+    }
+    const start = n - Math.round(rate * 0.5);
+    const before = rms(noise, start, n);
+    const nr = new DidahNoiseReduction(rate);
+    nr.setEnabled(true);
+    nr.setStrength(100);
+    nr.process(noise, noise.length);
+    const after = rms(noise, start, n);
+    const db = 20 * Math.log10(before / Math.max(after, 1e-12));
+    assert.ok(db >= 3, `NR ${db.toFixed(1)} dB`);
+});
+
+test('autonotch at 12 kHz attenuates a 60 ms dit by less than 1 dB', () => {
+    const rate = 12000;
+    const dit = Math.round(rate * 0.06);
+    const buf = new Float32Array(rate);
+    const w = (2 * Math.PI * 700) / rate;
+    for (let i = 0; i < dit; i++) buf[i] = 0.2 * Math.sin(w * i);
+    const bodyIn = rms(buf, Math.round(dit * 0.4), dit);
+    const n = new DidahAutoNotch(rate);
+    n.setEnabled(true);
+    n.setDepth(100);
+    n.process(buf, buf.length);
+    const bodyOut = rms(buf, Math.round(dit * 0.4), dit);
+    const db = 20 * Math.log10(bodyIn / Math.max(bodyOut, 1e-12));
+    assert.ok(db < 1, `dit attenuation ${db.toFixed(2)} dB`);
 });

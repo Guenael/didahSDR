@@ -77,6 +77,26 @@ class AGC {
         this.setSpeed('medium');
     }
 
+    /** Drop envelope, gain and the delay line. Used when the tune jumps to a new station. */
+    reset() {
+        this.minBuf.fill(1.0);
+        this.firBuf.fill(1.0);
+        this.delayBuf.fill(0.0);
+        this.bufIdx = 0;
+        this.delayIdx = 0;
+        this.floorBlocks.fill(1.0);
+        this.floorBlockIdx = 0;
+        this.floorBlockTick = 0;
+        this.floorBlockSum = 0.0;
+        this.env = 0.0;
+        this.fastEnv = 0.0;
+        this.blockPeak = 0.0;
+        this.noiseFloor = 1e-3;
+        this.gPrev = 1.0;
+        this.gNext = 1.0;
+        this.phase = 0;
+    }
+
     /** 'fast' | 'medium' | 'slow' : envelope release time 40 / 100 / 300 ms */
     setSpeed(speed) {
         const ms = speed === 'fast' ? 40.0 : speed === 'slow' ? 300.0 : 100.0;

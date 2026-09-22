@@ -7,16 +7,16 @@ const {
     encodeFreqBcd, decodeFreqBcd, civCommand, civSetFrequency, civSetMode, classifyCivFrame, CivParser, Ic7300Cat
 } = req('civ.js');
 const {
-    IC7300_IF_HZ, IC7300_CW_TRACE_HZ, IC7300_NATIVE_RATE, IC7300_SSB_SPAN_HZ,
-    mapCivMode, didahToCivMode, ic7300IfScale, ic7300Geometry, ic7300View, ic7300Zoom,
-    designHilbert, RealIfConverter
+    IC7300_IF_HZ, IC7300_CW_TRACE_HZ, IC7300_CW_PITCH_HZ, IC7300_OUT_RATE, IC7300_SSB_SPAN_HZ,
+    mapCivMode, didahToCivMode, ic7300DecimPlan, ic7300Geometry, ic7300View, ic7300Zoom,
+    RealIfConverter
 } = req('ic7300_if.js');
 const { findSource } = req('sources.js');
 
 test('catalog lists the IC-7300 as a real-IF source', () => {
     const src = findSource('ic7300');
     assert.equal(src.protocol, 'ic7300');
-    assert.equal(src.startFreq, IC7300_CW_TRACE_HZ);
+    assert.equal(src.startFreq, IC7300_CW_TRACE_HZ - IC7300_IF_HZ);
     assert.equal(src.startMod, 'cw');
 });
 
@@ -101,7 +101,7 @@ test('default wiring puts PTT on RTS and CW on DTR', async () => {
     ]);
 });
 
-test('mode map and geometry: CW cursor 11.350 kHz, USB on the carrier', () => {
+test('mode map and geometry: CW cursor is 650 Hz below the dial', () => {
     assert.equal(mapCivMode(0x03).mod, 'cw');
     assert.equal(mapCivMode(0x01).mod, 'usb');
     assert.equal(mapCivMode(0x00).mod, 'lsb');
@@ -110,67 +110,84 @@ test('mode map and geometry: CW cursor 11.350 kHz, USB on the carrier', () => {
     assert.equal(mapCivMode(0x02).mod, 'cw');
 
     const radio = 14048000;
-    const cw = ic7300Geometry(radio, 0x03, IC7300_NATIVE_RATE);
-    assert.equal(cw.centerFreq, radio - IC7300_IF_HZ);
-    assert.equal(cw.tunedFreq, radio - (IC7300_IF_HZ - IC7300_CW_TRACE_HZ));
-    assert.equal(cw.tunedFreq - cw.centerFreq, IC7300_CW_TRACE_HZ);
+    const cw = ic7300Geometry(radio, 0x03, IC7300_OUT_RATE);
+    assert.equal(cw.centerFreq, radio);
+    assert.equal(cw.tunedFreq, radio - IC7300_CW_PITCH_HZ);
+    assert.equal(cw.tunedFreq - cw.centerFreq, -IC7300_CW_PITCH_HZ);
+    assert.equal(cw.ifHz, 0);
     assert.equal(cw.modulation, 'cw');
 
-    const usb = ic7300Geometry(radio, 0x01, 48000);
+    const usb = ic7300Geometry(radio, 0x01, IC7300_OUT_RATE);
     assert.equal(usb.tunedFreq, radio);
-    assert.equal(usb.tunedFreq - usb.centerFreq, IC7300_IF_HZ);
+    assert.equal(usb.tunedFreq - usb.centerFreq, 0);
     assert.equal(usb.modulation, 'usb');
 
-    const cwr = ic7300Geometry(radio, 0x07, 48000);
-    assert.equal(cwr.tunedFreq - cwr.centerFreq, IC7300_IF_HZ + (IC7300_IF_HZ - IC7300_CW_TRACE_HZ));
+    const cwr = ic7300Geometry(radio, 0x07, IC7300_OUT_RATE);
+    assert.equal(cwr.tunedFreq - cwr.centerFreq, IC7300_CW_PITCH_HZ);
 
-    const pending = ic7300Geometry(0, null, 48000);
+    const pending = ic7300Geometry(0, null, IC7300_OUT_RATE);
     assert.equal(pending.centerFreq, 0);
-    assert.equal(pending.tunedFreq, IC7300_CW_TRACE_HZ);
+    assert.equal(pending.tunedFreq, -IC7300_CW_PITCH_HZ);
 });
 
-test('96 kHz keeps the 12 kHz IF; 44.1 kHz scales it', () => {
-    assert.equal(ic7300IfScale(48000), 1);
-    assert.equal(ic7300IfScale(96000), 1);
-    assert.equal(ic7300IfScale(192000), 1);
-    const scaled = ic7300Geometry(14048000, 0x03, 44100);
-    const expectTrace = Math.round(IC7300_CW_TRACE_HZ * 44100 / 48000);
-    assert.equal(scaled.tunedFreq - scaled.centerFreq, expectTrace);
-    assert.notEqual(expectTrace, IC7300_CW_TRACE_HZ);
-    assert.equal(ic7300Zoom(48000, 24), 48000 / 2500);
-    assert.equal(ic7300Zoom(96000, 24), 24);
+test('48/96/192 kHz contexts emit 12 kHz; 44.1 kHz scales the pitch', () => {
+    assert.equal(ic7300DecimPlan(48000).outRate, 12000);
+    assert.equal(ic7300DecimPlan(48000).decim, 4);
+    assert.equal(ic7300DecimPlan(96000).outRate, 12000);
+    assert.equal(ic7300DecimPlan(96000).decim, 8);
+    assert.equal(ic7300DecimPlan(192000).decim, 16);
+    const scaled = ic7300Geometry(14048000, 0x03, 11025);
+    const expectOff = -Math.round(IC7300_CW_PITCH_HZ * 11025 / 12000);
+    assert.equal(scaled.centerFreq, 14048000);
+    assert.equal(scaled.tunedFreq - scaled.centerFreq, expectOff);
+    assert.notEqual(expectOff, -IC7300_CW_PITCH_HZ);
+    assert.equal(ic7300DecimPlan(44100).outRate, 11025);
+    assert.equal(ic7300Zoom(12000, 24), 12000 / 2500);
 });
 
-test('Hilbert taps are antisymmetric and reject the negative image', () => {
-    const h = designHilbert(63);
-    const mid = (h.length - 1) >> 1;
-    assert.equal(h[mid], 0);
-    for (let k = 1; k <= mid; k++) {
-        assert.ok(Math.abs(h[mid + k] + h[mid - k]) < 1e-6);
-    }
-
-    const rate = 48000;
-    const freq = 3000;
-    const n = 8192;
-    const conv = new RealIfConverter(h);
-    const iq = new Int16Array(n * 2);
+function convertReal(conv, freq, rate, n) {
+    const iq = new Int16Array(Math.ceil(n / conv.decim) * 2 + 8);
+    let fill = 0;
+    const w = (2 * Math.PI * freq) / rate;
     for (let i = 0; i < n; i++) {
-        conv.step(Math.cos((2 * Math.PI * freq * i) / rate), iq, i);
+        if (conv.push(Math.cos(w * i), iq, fill)) fill++;
     }
+    return iq.subarray(0, fill * 2);
+}
+
+function complexPeak(iq, rate) {
     const fftSize = 2048;
     const fft = new DidahFFT(fftSize);
     const re = new Float32Array(fftSize);
     const im = new Float32Array(fftSize);
-    const start = n - fftSize;
+    const complex = iq.length / 2;
+    const start = complex - fftSize;
     for (let i = 0; i < fftSize; i++) {
         re[i] = iq[(start + i) * 2] / 32767;
         im[i] = iq[(start + i) * 2 + 1] / 32767;
     }
     const spec = fft.computeSpectrumDb(re, im);
-    const bin = Math.round((freq / rate) * fftSize);
-    const pos = fftSize / 2 + bin;
-    const neg = fftSize / 2 - bin;
-    assert.ok(spec[pos] > spec[neg] + 30, `positive ${spec[pos]} negative ${spec[neg]}`);
+    const bin = Math.round((1000 / rate) * fftSize);
+    return { pos: spec[fftSize / 2 + bin], neg: spec[fftSize / 2 - bin] };
+}
+
+test('fs/4 mix centres the 12 kHz IF and rejects the negative image', () => {
+    const rate = 48000;
+    const n = rate;
+    const conv = new RealIfConverter(rate);
+    assert.equal(conv.outRate, 12000);
+    assert.equal(conv.decim, 4);
+    const up = complexPeak(convertReal(conv, 13000, rate, n), conv.outRate);
+    assert.ok(up.pos > -6, `+1 kHz level ${up.pos.toFixed(1)} dBFS`);
+    assert.ok(up.pos > up.neg + 40, `+1 kHz ${up.pos.toFixed(1)} vs image ${up.neg.toFixed(1)}`);
+
+    const down = complexPeak(convertReal(new RealIfConverter(rate), 11000, rate, n), 12000);
+    assert.ok(down.neg > down.pos + 40, `−1 kHz ${down.neg.toFixed(1)} vs image ${down.pos.toFixed(1)}`);
+
+    const wide = new RealIfConverter(96000);
+    assert.equal(wide.outRate, 12000);
+    const up96 = complexPeak(convertReal(wide, 13000, 96000, 96000), 12000);
+    assert.ok(up96.pos > up96.neg + 40, `96 kHz +1 kHz ${up96.pos.toFixed(1)} vs image ${up96.neg.toFixed(1)}`);
 });
 
 test('set-frequency and set-mode frames', () => {
@@ -186,15 +203,15 @@ test('set-frequency and set-mode frames', () => {
 });
 
 test('SSB view covers about 4 kHz of the sideband; CW stays on the trace', () => {
-    const cw = ic7300View(0x03, 48000);
+    const cw = ic7300View(0x03, IC7300_OUT_RATE);
     assert.equal(cw.span, 2500);
-    assert.equal(cw.audioCenter, IC7300_CW_TRACE_HZ);
-    const usb = ic7300View(0x01, 48000, { low: 200, high: 2700 });
+    assert.equal(cw.audioCenter, -IC7300_CW_PITCH_HZ);
+    const usb = ic7300View(0x01, IC7300_OUT_RATE, { low: 200, high: 2700 });
     assert.equal(usb.span, IC7300_SSB_SPAN_HZ);
-    assert.equal(usb.audioCenter, IC7300_IF_HZ + 1450);
-    const lsb = ic7300View(0x00, 48000, { low: -2700, high: -200 });
-    assert.equal(lsb.audioCenter, IC7300_IF_HZ - 1450);
+    assert.equal(usb.audioCenter, 1450);
+    const lsb = ic7300View(0x00, IC7300_OUT_RATE, { low: -2700, high: -200 });
+    assert.equal(lsb.audioCenter, -1450);
     const usbLo = usb.audioCenter - usb.span / 2;
     const usbHi = usb.audioCenter + usb.span / 2;
-    assert.ok(usbLo <= IC7300_IF_HZ + 200 && usbHi >= IC7300_IF_HZ + 2700);
+    assert.ok(usbLo <= 200 && usbHi >= 2700);
 });

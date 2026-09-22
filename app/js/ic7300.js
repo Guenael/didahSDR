@@ -1,8 +1,9 @@
 /**
  * didahSDR - IC-7300 audio + CI-V facade
  *
- * Audio is the PCM2901 real IF. Open at 48 kHz when the browser allows it, and
- * run the FFT at the AudioContext rate actually constructed. The node is mono
+ * Audio is the PCM2901 real IF. Open at 48 kHz when the browser allows it.
+ * The capture worklet shifts the 12 kHz IF to DC and decimates to ~12 kHz
+ * complex before the rest of the pipeline sees a sample. The node is mono
  * so Chrome does not silence a one-channel USB input. CI-V is a separate
  * Web Serial session; this file never sends a frequency.
  */
@@ -26,7 +27,7 @@ class Ic7300Source {
         this.devices = [];
         this.deviceId = '';
         this.connected = false;
-        this.sampleRate = IC7300_NATIVE_RATE;
+        this.sampleRate = IC7300_OUT_RATE;
         this.trackRate = 0;
         this.channels = 0;
         this.serialText = 'CI-V not connected.';
@@ -205,6 +206,7 @@ class Ic7300Source {
                 return;
             }
 
+            await ctx.audioWorklet.addModule('js/demodulator.js');
             await ctx.audioWorklet.addModule('js/ic7300_if.js');
             await ctx.audioWorklet.addModule('js/ic7300_capture_worklet.js');
             const sourceNode = ctx.createMediaStreamSource(stream);
@@ -225,33 +227,35 @@ class Ic7300Source {
 
             const mute = ctx.createGain();
             mute.gain.value = 0;
-            sourceNode.connect(node);
-            node.connect(mute);
-            mute.connect(ctx.destination);
-
+            const plan = ic7300DecimPlan(ctx.sampleRate);
             this.stream = stream;
             this.ctx = ctx;
             this.node = node;
             this.sourceNode = sourceNode;
             this.mute = mute;
             this.deviceId = deviceId;
-            this.sampleRate = Math.round(ctx.sampleRate);
+            this.sampleRate = plan.outRate;
             this.connected = true;
-            const khz = this.sampleRate / 1000;
             const trackTxt = this.trackRate ? (this.trackRate / 1000) + ' kHz' : 'unknown';
             this._status(
-                'IC-7300 IF · track ' + trackTxt + ' · ' + this.channels + ' ch · context '
-                + khz + ' kHz.',
+                'IC-7300 IF · track ' + trackTxt + ' · ' + this.channels + ' ch · '
+                + (ctx.sampleRate / 1000) + ' kHz → ' + (plan.outRate / 1000) + ' kHz IQ.',
                 true
             );
+            // Publish the decimated rate before the graph runs, so the first
+            // packet is demodulated at 12 kHz rather than the previous source rate.
             if (this.onReady) {
                 this.onReady({
                     sampleRate: this.sampleRate,
                     trackRate: this.trackRate,
                     channels: this.channels,
+                    contextRate: Math.round(ctx.sampleRate),
                     deviceId
                 });
             }
+            sourceNode.connect(node);
+            node.connect(mute);
+            mute.connect(ctx.destination);
         } catch (e) {
             this._status((e && e.message) ? e.message : 'IC-7300 audio open failed.', false);
             await this.stop();

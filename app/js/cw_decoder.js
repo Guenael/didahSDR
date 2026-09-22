@@ -6,6 +6,12 @@
  * while the window is visible and the mode is CW. `reset()` on retune / bandwidth / source change.
  */
 
+// resampler.js already declares ComplexPolyphase in the page scope. A second
+// const/class of that name is a syntax error and stops the rest of the app.
+const CwTapResampler = (typeof globalThis !== 'undefined' && globalThis.ComplexPolyphase)
+    ? globalThis.ComplexPolyphase
+    : require('./resampler.js').ComplexPolyphase;
+
 const CW_HIGHLIGHT = {
     exchange: /^(5NN|599|57N|579|58N|589|55N|559|56N|569|EN|TU|TNX|TKS)$/,
     keyword: /^(CQ|TEST|DE|BK|73|88|UR|CFM|KN|SK|AR|QRZ|QRL|QTH|QSL|QSB|QRM|QRN|OP|ES|FB|GA|GE|GM|GL|CUL|OM|YL|RST|AGN|PSE|HW|RIG|ANT|WX|DX|=|\+)$/,
@@ -58,9 +64,22 @@ class CWDecoder {
         return Math.abs(r - rate) / rate < 0.01 ? r : 0;
     }
 
+    /**
+     * Rate the worker's frontend is built at. A channel rate that does not snap
+     * (the 44.1 kHz family lands on 11025) is resampled to 12000. Anything else is refused.
+     */
+    static ratePlan(audioRate) {
+        const direct = CWDecoder.usableRate(audioRate);
+        if (direct) return { rate: direct, resample: false };
+        if (audioRate >= 8000 && audioRate <= 48000) return { rate: 12000, resample: true };
+        return { rate: 0, resample: false };
+    }
+
     start(audioRate) {
-        const rate = CWDecoder.usableRate(audioRate);
-        if (!rate) { this._status('error', `unsupported rate ${audioRate}`); return; }
+        const plan = CWDecoder.ratePlan(audioRate);
+        if (!plan.rate) { this._status('error', `unsupported rate ${audioRate}`); return; }
+        this._bindResampler(audioRate, plan);
+        const rate = plan.rate;
         if (!this.worker) {
             this.worker = new Worker('js/cw_decoder_worker.js');
             this.worker.onmessage = (ev) => this._onMessage(ev.data);
@@ -90,17 +109,24 @@ class CWDecoder {
 
     setRate(audioRate) {
         if (!this.active) return;
-        const rate = CWDecoder.usableRate(audioRate);
-        if (rate && rate !== this.rate) {
-            this.rate = rate;
-            this._setChunk(rate);
-            this.worker.postMessage({ type: 'rate', rate });
+        const plan = CWDecoder.ratePlan(audioRate);
+        if (!plan.rate) {
+            this.stop();
+            this._status('error', `unsupported rate ${audioRate}`);
+            return;
+        }
+        this._bindResampler(audioRate, plan);
+        if (plan.rate !== this.rate) {
+            this.rate = plan.rate;
+            this._setChunk(plan.rate);
+            if (this.worker) this.worker.postMessage({ type: 'rate', rate: plan.rate });
         }
     }
 
     /** Drop the decoder state (retune, bandwidth or source change). Keeps the transcript. */
     reset() {
         this.fill = 0;
+        if (this._poly) this._poly.reset();
         if (this.worker) this.worker.postMessage({ type: 'reset' });
     }
 
@@ -122,8 +148,24 @@ class CWDecoder {
         return { i: new Float32Array(this.chunkSamples), q: new Float32Array(this.chunkSamples) };
     }
 
+    _bindResampler(audioRate, plan) {
+        if (!plan.resample) {
+            this._poly = null;
+            return;
+        }
+        if (!this._poly || this._poly.inRate !== audioRate || this._poly.outRate !== plan.rate) {
+            this._poly = new CwTapResampler(audioRate, plan.rate);
+        }
+    }
+
     _tap(i, q, n) {
         if (!this.active || !this.worker) return;
+        if (this._poly) {
+            n = this._poly.process(i, q, n);
+            if (n <= 0) return;
+            i = this._poly.outI;
+            q = this._poly.outQ;
+        }
         let p = 0;
         while (p < n) {
             if (!this.cur) { this.cur = this._buffer(); this.fill = 0; }

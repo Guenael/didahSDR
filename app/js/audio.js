@@ -62,10 +62,15 @@ class WebAudioPlayer {
 
         this.ctx.onstatechange = () => this.emitState();
 
-        this.initPromise = this.ctx.audioWorklet.addModule('js/cw_keyer.js')
+        this.initPromise = this.ctx.audioWorklet.addModule('js/resampler.js')
+            .then(() => this.ctx.audioWorklet.addModule('js/cw_keyer.js'))
             .then(() => this.ctx.audioWorklet.addModule('js/audio_worklet.js'))
             .then(() => {
-                this.node = new AudioWorkletNode(this.ctx, 'didah-audio', { numberOfInputs: 0, outputChannelCount: [1] });
+                this.node = new AudioWorkletNode(this.ctx, 'didah-audio', {
+                    numberOfInputs: 0,
+                    outputChannelCount: [1],
+                    processorOptions: { inputRate: this.INPUT_RATE }
+                });
                 this.node.port.onmessage = (e) => this.handleWorkletMessage(e.data);
                 this.node.connect(this.gainNode);
                 if (this.debug) this.node.port.postMessage({ type: 'debug', on: true });

@@ -54,9 +54,9 @@ const SOURCES = [
         minLevel: -90,
         dynamicRange: 50,
         fftSize: 2048,
-        startFreq: 11350,
+        startFreq: -650,
         startMod: 'cw',
-        note: 'Icom IC-7300 USB IF at 12 kHz. The dial and Shift+drag set the VFO; USB/LSB listen, CW transmits.'
+        note: 'Icom IC-7300 USB IF, mixed to complex baseband at 12 kHz. The dial and Shift+drag set the VFO; USB/LSB listen, CW transmits.'
     },
     {
         id: 'rtlsdr',

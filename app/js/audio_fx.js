@@ -16,10 +16,12 @@ function nextPow2(n) {
 
 /**
  * Shared NLMS predictor. History is a power-of-two ring so the delayed tap walk is a mask.
+ * Reference energy is a running sum (+r²_new − r²_old), recomputed from scratch once per packet.
+ * The regulariser is 0.1 % of the recent signal power, scaled up to the same units as that sum.
  * @param {boolean} keepPrediction  true → ANR (output ŷ); false → ANF (output x − ŷ)
  */
 class NlmsPredictor {
-    constructor(taps, delay, baseMu, keepPrediction) {
+    constructor(taps, delay, baseMu, keepPrediction, sampleRate) {
         this.taps = taps;
         this.delay = delay;
         this.baseMu = baseMu;
@@ -27,16 +29,20 @@ class NlmsPredictor {
         this.scale = 1.0;
         this.enabled = false;
         this.weights = new Float32Array(taps);
-        const histLen = nextPow2(taps + delay);
+        const histLen = nextPow2(taps + delay + 1);
         this.history = new Float32Array(histLen);
         this.mask = histLen - 1;
         this.write = 0;
+        const rate = Math.max(1000, sampleRate || 12000);
+        this.pCoeff = 1.0 - Math.exp(-1.0 / (rate * 0.02));
+        this.runP = 0.0;
     }
 
     reset() {
         this.weights.fill(0);
         this.history.fill(0);
         this.write = 0;
+        this.runP = 0.0;
     }
 
     setEnabled(on) {
@@ -63,27 +69,42 @@ class NlmsPredictor {
         const taps = this.taps;
         const delay = this.delay;
         const mu = this.baseMu * this.scale;
-        const histLen = history.length;
         const keep = this.keepPrediction;
+        const pCoeff = this.pCoeff;
         let write = this.write;
+        let runP = this.runP;
         let bad = false;
+
+        // Exact window energy once per packet; the sample loop then updates it in O(1).
+        let refP = 0.0;
+        {
+            const b0 = (write - delay) & mask;
+            for (let k = 0; k < taps; k++) {
+                const r = history[(b0 - k) & mask];
+                refP += r * r;
+            }
+        }
 
         for (let i = 0; i < n; i++) {
             let x = buf[i];
             if (!Number.isFinite(x)) x = 0.0;
-            write = (write + 1) & mask;
-            history[write] = x;
+            const wNew = (write + 1) & mask;
+            const rOld = history[(wNew - delay - taps) & mask];
+            history[wNew] = x;
+            write = wNew;
+            const rNew = history[(write - delay) & mask];
+            refP += rNew * rNew - rOld * rOld;
+            if (refP < 0) refP = 0;
+            runP += pCoeff * (x * x - runP);
 
-            const base = write + histLen - delay;
+            const base = write - delay;
             let predicted = 0.0;
-            let refP = 0.0;
             for (let k = 0; k < taps; k++) {
-                const r = history[(base - k) & mask];
-                predicted += weights[k] * r;
-                refP += r * r;
+                predicted += weights[k] * history[(base - k) & mask];
             }
             const error = x - predicted;
-            const step = mu * error / (refP + 1e-6);
+            const denom = refP + 1e-3 * runP * taps;
+            const step = mu * error / (denom > 1e-12 ? denom : 1e-12);
             for (let k = 0; k < taps; k++) {
                 weights[k] += step * history[(base - k) & mask];
             }
@@ -95,43 +116,115 @@ class NlmsPredictor {
             }
         }
         this.write = write;
+        this.runP = runP;
         if (bad) this.reset();
         return buf;
     }
 }
 
+/**
+ * 48 kHz design scaled in time. Under 24 kHz the notch step is small enough that
+ * a 60 ms dit stays within 1 dB, while a carrier lasting a second or two is notched.
+ */
+function notchParams(rate) {
+    if (rate >= 24000) {
+        return {
+            taps: Math.max(8, Math.round(rate * 64 / 48000)),
+            delay: Math.max(1, Math.round(rate * 4 / 48000)),
+            mu: 0.02
+        };
+    }
+    return {
+        taps: Math.max(24, Math.round(rate * 0.004)),
+        delay: Math.max(8, Math.round(rate * 0.001)),
+        mu: 0.0003
+    };
+}
+
+/**
+ * Under 24 kHz the delay is a few milliseconds, past the correlation time of
+ * noise in a few-hundred-hertz channel, so the predictor keeps a tone and drops the noise.
+ */
+function nrParams(rate) {
+    if (rate >= 24000) {
+        return {
+            taps: Math.max(8, Math.round(rate * 32 / 48000)),
+            delay: Math.max(1, Math.round(rate * 2 / 48000)),
+            mu: 0.01
+        };
+    }
+    return {
+        taps: Math.max(16, Math.round(rate * 0.002)),
+        delay: Math.max(16, Math.round(rate * 80 / 12000)),
+        mu: 0.003
+    };
+}
+
 class DidahAutoNotch {
-    constructor() {
-        this._lms = new NlmsPredictor(64, 4, 0.02, false);
-        this.setDepth(70);
+    constructor(sampleRate = 12000) {
+        this._depth = 70;
+        this.sampleRate = 0;
+        this._lms = null;
+        this.setSampleRate(sampleRate);
     }
 
     get enabled() { return this._lms.enabled; }
+
+    /** Retune taps and delay when the channel rate changes. Keeps enable and depth. */
+    setSampleRate(rate) {
+        const next = Math.max(1000, rate);
+        if (this._lms && next === this.sampleRate) return;
+        const prev = this._lms;
+        this.sampleRate = next;
+        const p = notchParams(next);
+        this._lms = new NlmsPredictor(p.taps, p.delay, p.mu, false, next);
+        this._lms.setScale(this._depth / 100);
+        if (prev && prev.enabled) this._lms.setEnabled(true);
+    }
 
     reset() { this._lms.reset(); }
 
     setEnabled(on) { this._lms.setEnabled(on); }
 
     /** Operator depth 25–100 (% of base μ). */
-    setDepth(pct) { this._lms.setScale(pct / 100); }
+    setDepth(pct) {
+        this._depth = pct;
+        this._lms.setScale(pct / 100);
+    }
 
     process(buf, n) { return this._lms.process(buf, n); }
 }
 
 class DidahNoiseReduction {
-    constructor() {
-        this._lms = new NlmsPredictor(32, 2, 0.01, true);
-        this.setStrength(50);
+    constructor(sampleRate = 12000) {
+        this._strength = 50;
+        this.sampleRate = 0;
+        this._lms = null;
+        this.setSampleRate(sampleRate);
     }
 
     get enabled() { return this._lms.enabled; }
+
+    setSampleRate(rate) {
+        const next = Math.max(1000, rate);
+        if (this._lms && next === this.sampleRate) return;
+        const prev = this._lms;
+        this.sampleRate = next;
+        const p = nrParams(next);
+        this._lms = new NlmsPredictor(p.taps, p.delay, p.mu, true, next);
+        this._lms.setScale(this._strength / 100);
+        if (prev && prev.enabled) this._lms.setEnabled(true);
+    }
 
     reset() { this._lms.reset(); }
 
     setEnabled(on) { this._lms.setEnabled(on); }
 
     /** Operator strength 25–100 (% of base μ). */
-    setStrength(pct) { this._lms.setScale(pct / 100); }
+    setStrength(pct) {
+        this._strength = pct;
+        this._lms.setScale(pct / 100);
+    }
 
     process(buf, n) { return this._lms.process(buf, n); }
 }
@@ -200,7 +293,10 @@ class DidahSquelch {
     observe(buf, n, noiseFloor) {
         if (!this.enabled || n <= 0) return;
         const floorAmp = noiseFloor > 1e-7 ? noiseFloor : 1e-7;
-        const openLin = floorAmp * floorAmp * this.marginLin;
+        // noiseFloor is a mean absolute envelope. For Gaussian noise RMS² = (π/2) (E|x|)²,
+        // so the margin is decibels above the noise RMS rather than above the envelope.
+        const rms2 = floorAmp * floorAmp * (Math.PI / 2);
+        const openLin = rms2 * this.marginLin;
         const closeLin = openLin * this.hysteresisLin;
         const c = this.powerCoeff;
         const hold = this.holdSamples;
@@ -247,5 +343,5 @@ class DidahSquelch {
 }
 
 if (typeof module !== 'undefined') {
-    module.exports = { DidahAutoNotch, DidahNoiseReduction, DidahSquelch, NlmsPredictor };
+    module.exports = { DidahAutoNotch, DidahNoiseReduction, DidahSquelch, NlmsPredictor, notchParams, nrParams };
 }

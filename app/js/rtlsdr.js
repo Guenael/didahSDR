@@ -3,8 +3,9 @@
  *
  * The stick runs at 1.536 Msps. An fs/4 mix (no multiplies, same sense as
  * rtlsdr-wsprd) shifts the capture so the dial centre was 384 kHz below the
- * hardware LO, which parks the RTL DC spike on a CIC null. An N=2, R=8 CIC
- * then a 33-tap compensator deliver 192 kHz int16 IQ to processRawIQ.
+ * hardware LO, which parks the RTL DC spike on a CIC null. An N=5, R=8 CIC
+ * then a 49-tap compensator deliver 192 kHz int16 IQ to processRawIQ.
+ * N=2 left the ±50 kHz alias only about 18 dB down; N=5 puts it near 50 dB.
  *
  * Register programming for the demodulator and the R820T follows the Apache-2.0
  * webrtlsdr driver (Copyright 2013 Google Inc., Copyright 2024 Jacobo Tarrio
@@ -17,18 +18,22 @@ const RTL_FS4_HZ = 384000;
 const RTL_DECIM = 8;
 const RTL_XTAL_HZ = 28800000;
 const RTL_IF_HZ = 3570000;
-const RTL_CIC_GAIN = 64;
+const RTL_CIC_N = 5;
+const RTL_CIC_GAIN = 32768; // R^N = 8^5
 const RTL_IQ_SCALE = 96;
 const RTL_BULK_BYTES = 65536;
 
-/** Inverse-sinc for a CIC N=2, R=8, M=1, DC gain 1. Flat to about 0.02 dB at ±80 kHz. */
+/** Inverse-sinc for a CIC N=5, R=8, M=1, DC gain 1. Flat to about 0.1 dB through ±80 kHz. */
 const RTL_CIC_COMP = new Float64Array([
-    0.00015115, -0.00019083, 0.00028334, -0.00044953, 0.00071811, -0.00112990,
-    0.00174513, -0.00265651, 0.00401393, -0.00607416, 0.00930872, -0.01466179,
-    0.02424877, -0.04359414, 0.09075162, -0.25079360, 1.37665938, -0.25079360,
-    0.09075162, -0.04359414, 0.02424877, -0.01466179, 0.00930872, -0.00607416,
-    0.00401393, -0.00265651, 0.00174513, -0.00112990, 0.00071811, -0.00044953,
-    0.00028334, -0.00019083, 0.00015115
+    0.00038248, -0.00037140, 0.00024573, 0.00012103, -0.00094322, 0.00252426,
+    -0.00524501, 0.00953782, -0.01584675, 0.02457522, -0.03602393, 0.05032194,
+    -0.06735339, 0.08668031, -0.10745670, 0.12831891, -0.14721646, 0.16110155,
+    -0.16528866, 0.15202352, -0.10703945, 0.00053540, 0.23889348, -0.80567981,
+    2.20640621, -0.80567981, 0.23889348, 0.00053540, -0.10703945, 0.15202352,
+    -0.16528866, 0.16110155, -0.14721646, 0.12831891, -0.10745670, 0.08668031,
+    -0.06735339, 0.05032194, -0.03602393, 0.02457522, -0.01584675, 0.00953782,
+    -0.00524501, 0.00252426, -0.00094322, 0.00012103, 0.00024573, -0.00037140,
+    0.00038248
 ]);
 
 const RTL_USB_FILTERS = [
@@ -78,8 +83,9 @@ function rtlUsesPll(mode, nominalHz) {
 }
 
 /**
- * 8:1 CIC (N=2, M=1) plus the compensator. State is kept across bulk buffers
- * so the fs/4 phase does not slip. Output is interleaved int16.
+ * 8:1 CIC (N=5, M=1) plus the compensator. State is kept across bulk buffers
+ * so the fs/4 phase does not slip. Integrators wrap in int32; the comb output
+ * fits because 127·8^5 is well under 2^31. Output is interleaved int16.
  */
 class RtlDecimator {
     constructor() {
@@ -89,12 +95,24 @@ class RtlDecimator {
     reset() {
         this.Ix1 = 0;
         this.Ix2 = 0;
+        this.Ix3 = 0;
+        this.Ix4 = 0;
+        this.Ix5 = 0;
         this.Qx1 = 0;
         this.Qx2 = 0;
-        this.It1 = 0;
-        this.Qt1 = 0;
-        this.It2 = 0;
-        this.Qt2 = 0;
+        this.Qx3 = 0;
+        this.Qx4 = 0;
+        this.Qx5 = 0;
+        this.dI1 = 0;
+        this.dI2 = 0;
+        this.dI3 = 0;
+        this.dI4 = 0;
+        this.dI5 = 0;
+        this.dQ1 = 0;
+        this.dQ2 = 0;
+        this.dQ3 = 0;
+        this.dQ4 = 0;
+        this.dQ5 = 0;
         this.decimIndex = 0;
         this.mixPhase = 0;
         this.firI = new Float64Array(RTL_CIC_COMP.length);
@@ -135,26 +153,46 @@ class RtlDecimator {
                 Q = -t;
             }
 
-            this.Ix1 = (this.Ix1 + I) | 0;
-            this.Qx1 = (this.Qx1 + Q) | 0;
-            this.Ix2 = (this.Ix2 + this.Ix1) | 0;
-            this.Qx2 = (this.Qx2 + this.Qx1) | 0;
+            let Ix1 = (this.Ix1 + I) | 0;
+            let Ix2 = (this.Ix2 + Ix1) | 0;
+            let Ix3 = (this.Ix3 + Ix2) | 0;
+            let Ix4 = (this.Ix4 + Ix3) | 0;
+            let Ix5 = (this.Ix5 + Ix4) | 0;
+            let Qx1 = (this.Qx1 + Q) | 0;
+            let Qx2 = (this.Qx2 + Qx1) | 0;
+            let Qx3 = (this.Qx3 + Qx2) | 0;
+            let Qx4 = (this.Qx4 + Qx3) | 0;
+            let Qx5 = (this.Qx5 + Qx4) | 0;
+            this.Ix1 = Ix1;
+            this.Ix2 = Ix2;
+            this.Ix3 = Ix3;
+            this.Ix4 = Ix4;
+            this.Ix5 = Ix5;
+            this.Qx1 = Qx1;
+            this.Qx2 = Qx2;
+            this.Qx3 = Qx3;
+            this.Qx4 = Qx4;
+            this.Qx5 = Qx5;
             this.decimIndex++;
             if (this.decimIndex < RTL_DECIM) continue;
             this.decimIndex = 0;
 
-            const c1I = (this.Ix2 - this.It1) | 0;
-            this.It1 = this.Ix2;
-            const c1Q = (this.Qx2 - this.Qt1) | 0;
-            this.Qt1 = this.Qx2;
-            const c2I = (c1I - this.It2) | 0;
-            this.It2 = c1I;
-            const c2Q = (c1Q - this.Qt2) | 0;
-            this.Qt2 = c1Q;
+            let vI = Ix5;
+            let prev = this.dI1; this.dI1 = vI; vI = (vI - prev) | 0;
+            prev = this.dI2; this.dI2 = vI; vI = (vI - prev) | 0;
+            prev = this.dI3; this.dI3 = vI; vI = (vI - prev) | 0;
+            prev = this.dI4; this.dI4 = vI; vI = (vI - prev) | 0;
+            prev = this.dI5; this.dI5 = vI; vI = (vI - prev) | 0;
+            let vQ = Qx5;
+            prev = this.dQ1; this.dQ1 = vQ; vQ = (vQ - prev) | 0;
+            prev = this.dQ2; this.dQ2 = vQ; vQ = (vQ - prev) | 0;
+            prev = this.dQ3; this.dQ3 = vQ; vQ = (vQ - prev) | 0;
+            prev = this.dQ4; this.dQ4 = vQ; vQ = (vQ - prev) | 0;
+            prev = this.dQ5; this.dQ5 = vQ; vQ = (vQ - prev) | 0;
 
             const pos = this.firPos;
-            this.firI[pos] = c2I;
-            this.firQ[pos] = c2Q;
+            this.firI[pos] = vI;
+            this.firQ[pos] = vQ;
             let accI = 0;
             let accQ = 0;
             let k = pos;
@@ -300,20 +338,20 @@ class RtlCom {
         await this.setSysReg(0x3001, r & 0xff);
     }
 
-    /** Copy a bulk IN into `dst`. Returns the byte count. */
-    async readBulk(dst) {
-        const result = await this.device.transferIn(1, dst.length);
+    /** One bulk IN, as a view of the transfer buffer (no extra copy). */
+    async readBulk() {
+        const result = await this.device.transferIn(1, RTL_BULK_BYTES);
         if (result.status === 'stall') {
             await this.device.clearHalt('in', 1);
-            return 0;
+            return null;
         }
         if (result.status !== 'ok' || !result.data) {
             throw new Error('USB bulk read failed (' + (result && result.status) + ')');
         }
         const view = result.data;
-        const n = Math.min(dst.length, view.byteLength);
-        if (n > 0) dst.set(new Uint8Array(view.buffer, view.byteOffset, n));
-        return n;
+        const n = Math.min(RTL_BULK_BYTES, view.byteLength) & ~1;
+        if (n < 2) return null;
+        return new Uint8Array(view.buffer, view.byteOffset, n);
     }
 
     async resetBuffer() {
@@ -643,11 +681,8 @@ class RtlSdrSource {
         this._freqTimer = null;
         this._tuneSeq = 0;
         this._decimator = new RtlDecimator();
-        // Two bulk buffers so the next IN transfer is queued before demod/FFT.
-        // WebUSB allows only one transferIn at a time; the gap with none queued
-        // is where the dongle overruns and the audio buffer later underruns.
-        this._bulk = new Uint8Array(RTL_BULK_BYTES);
-        this._bulk2 = new Uint8Array(RTL_BULK_BYTES);
+        // The next IN is queued before demod runs. WebUSB allows only one
+        // transferIn at a time; the transfer buffer stays valid until that call returns.
         this._out = new Int16Array((RTL_BULK_BYTES / 2 / RTL_DECIM) * 2);
     }
 
@@ -813,20 +848,6 @@ class RtlSdrSource {
         }
     }
 
-    /**
-     * Demodulate one decimated chunk in short slices. A microtask yield between
-     * slices lets a completed USB read queue the next IN before this returns.
-     */
-    async _demodSlices(iq, ns) {
-        const step = 1024; // int16 values: 512 complex samples, a few ms of demod
-        for (let i = 0; i < ns; i += step) {
-            if (!this._reading || !this.onRawIQ) return;
-            const end = i + step < ns ? i + step : ns;
-            this.onRawIQ(iq.subarray(i, end));
-            if (end < ns) await Promise.resolve();
-        }
-    }
-
     _stream() {
         if (this._reading || !this._com) return;
         this._reading = true;
@@ -842,46 +863,26 @@ class RtlSdrSource {
                 this.streaming = false;
                 return;
             }
-            // One USB read is always in flight. Demod of a 21 ms chunk can take
-            // longer than that on the main thread; if it does, the completed read
-            // sits with nothing queued and the dongle drops samples. Yielding
-            // between short slices lets the completion handler queue the next
-            // read before the FIFO overruns (~3% short is one underrun every
-            // couple of seconds, which matches the audio log).
-            const bufs = [this._bulk, this._bulk2];
-            const iqPool = [
-                new Int16Array(this._out.length),
-                new Int16Array(this._out.length),
-                new Int16Array(this._out.length),
-                new Int16Array(this._out.length)
-            ];
-            let iqSlot = 0;
-            let audioChain = Promise.resolve();
+            // One USB read is always in flight. The next transferIn is started
+            // before demod, and it cannot complete until this turn yields, so the
+            // current buffer stays valid for a synchronous processRawIQ.
             const fail = () => {
                 if (!this._reading) return;
                 this._reading = false;
                 this.streaming = false;
                 this._status('USB read failed', false);
             };
-            const kick = (slot) => {
+            const kick = () => {
                 if (!this._reading || this._com !== com) return;
-                com.readBulk(bufs[slot]).then((n) => {
+                com.readBulk().then((src) => {
                     if (!this._reading || this._com !== com) return;
-                    kick(slot ^ 1);
-                    if (n < 2) return;
-                    const iq = iqPool[iqSlot];
-                    iqSlot = (iqSlot + 1) % iqPool.length;
-                    const ns = this._decimator.process(bufs[slot], n, iq);
-                    if (ns < 2 || !this.onRawIQ) return;
-                    const deliver = iq;
-                    const count = ns;
-                    audioChain = audioChain
-                        .then(() => this._demodSlices(deliver, count))
-                        .catch(() => {});
+                    kick();
+                    if (!src || src.length < 2 || !this.onRawIQ) return;
+                    const ns = this._decimator.process(src, src.length, this._out);
+                    if (ns >= 2) this.onRawIQ(this._out.subarray(0, ns));
                 }, fail);
             };
-            console.info('[rtl] audio pump v3');
-            kick(0);
+            kick();
             // The loop above is self-perpetuating. Park until stop/close clears _reading
             // so _stream's caller contract (a running flag) stays true.
             while (this._reading && this._com === com) {

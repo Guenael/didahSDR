@@ -284,44 +284,27 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         samplesAvailable += numComplex;
 
-        // RTL-SDR shares the main thread with the USB read. Speed 4 at 192 kHz
-        // wants ~375 spectra/s, and each one uploads a WebGL column. Doing that
-        // inside the USB callback overruns the dongle and the audio buffer
-        // underruns a moment later. Demod stays here; spectra run on a short
-        // animation-frame budget, and leftover hops are dropped.
-        if (source.protocol === 'rtlsdr') scheduleRtlSpectrum();
-        else consumeSpectrumSlices(0);
+        // Column rate stays a true time axis: WF Speed is still the STFT hop, and a
+        // cap keeps 192 kHz from asking for hundreds of WebGL uploads per second.
+        consumeSpectrumSlices();
         updateTrxLeds();
     }
 
-    let rtlSpectrumScheduled = false;
+    const MAX_SPECTRUM_COLS = 200;
 
-    function scheduleRtlSpectrum() {
-        if (rtlSpectrumScheduled) return;
-        rtlSpectrumScheduled = true;
-        requestAnimationFrame(drainRtlSpectrum);
+    function spectrumHopSize() {
+        const speed = state.qrssEnabled ? 2 : Math.max(1, state.speedMultiplier);
+        const bySpeed = Math.floor(state.fftSize / speed);
+        const byCap = Math.ceil(state.sampleRate / MAX_SPECTRUM_COLS);
+        return Math.max(1, bySpeed, byCap);
     }
 
-    function drainRtlSpectrum() {
-        rtlSpectrumScheduled = false;
-        if (source.protocol !== 'rtlsdr' || !state.running) return;
-        const caughtUp = consumeSpectrumSlices(4, 2);
-        if (!caughtUp && samplesAvailable > state.fftSize) samplesAvailable = state.fftSize;
-        if (samplesAvailable >= state.fftSize) scheduleRtlSpectrum();
-    }
-
-    /** Draw waterfall slices until the ring is caught up, the time budget, or `maxSlices` (0 = no limit). */
-    function consumeSpectrumSlices(budgetMs, maxSlices) {
-        const hopDiv = state.qrssEnabled ? 2 : Math.max(1, state.speedMultiplier);
-        const hopSize = Math.max(128, Math.floor(state.fftSize / hopDiv));
+    /** Draw waterfall slices until the ring is caught up. */
+    function consumeSpectrumSlices() {
+        const hopSize = spectrumHopSize();
         const avgN = state.qrssEnabled ? qrssAvgCount() : 1;
-        const deadline = budgetMs > 0 ? performance.now() + budgetMs : 0;
-        let drawn = 0;
 
         while (samplesAvailable >= state.fftSize) {
-            if (deadline && performance.now() >= deadline) return false;
-            if (maxSlices && drawn >= maxSlices) return false;
-            drawn++;
 
             let readIdx = (ringHead - samplesAvailable + RING_SIZE) % RING_SIZE;
             for (let i = 0; i < state.fftSize; i++) {
@@ -356,7 +339,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
             samplesAvailable -= hopSize;
         }
-        return true;
     }
 
     function resetIqPipeline() {
@@ -1056,7 +1038,7 @@ document.addEventListener('DOMContentLoaded', () => {
             state.centerFreq = 0;
             applyIqRate((sound && sound.sampleRate) || 96000);
         } else if (src.protocol === 'ic7300') {
-            applyIqRate((ic7300 && ic7300.sampleRate) || IC7300_NATIVE_RATE);
+            applyIqRate((ic7300 && ic7300.sampleRate) || 12000);
             applyIc7300Tuning();
         } else if (src.protocol === 'rtlsdr') {
             state.centerFreq = src.startFreq;

@@ -60,6 +60,28 @@ test('reset drops everything and returns to prebuffering', () => {
     assert.equal(peakAbs(Object.assign(new Float32Array(128), {})), 0);
 });
 
+test('polyphase upsample keeps the 11 kHz image well below a 1 kHz tone', () => {
+    const e = new DidahAudioEngine(12000, 48000);
+    e.push(tone(e.minPrebuffer + 12000, 1000, 12000, 0.5));
+    const out = new Float32Array(16384);
+    const block = new Float32Array(512);
+    for (let filled = 0; filled < out.length; filled += block.length) {
+        e.render(block);
+        out.set(block, filled);
+    }
+    const fftSize = 8192;
+    const fft = new DidahFFT(fftSize);
+    const re = new Float32Array(fftSize);
+    re.set(out.subarray(out.length - fftSize));
+    const spec = fft.computeSpectrumDb(re, new Float32Array(fftSize));
+    const bin = (hz) => {
+        const k = fftSize / 2 + Math.round((hz / 48000) * fftSize);
+        return Math.max(spec[k - 1], spec[k], spec[k + 1]);
+    };
+    const gap = bin(1000) - bin(11000);
+    assert.ok(gap > 30, `1 kHz is ${gap.toFixed(1)} dB above the 11 kHz image`);
+});
+
 test('setInputRate(12000) resamples toward the context rate and resets the ring', () => {
     const e = new DidahAudioEngine(48000, 48000);
     e.push(tone(8000));

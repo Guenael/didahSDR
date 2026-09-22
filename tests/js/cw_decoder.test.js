@@ -26,7 +26,11 @@ test('usable rates snap to multiples of 800 within 1 %', () => {
     assert.equal(CWDecoder.usableRate(48000), 48000);
     assert.equal(CWDecoder.usableRate(12001.2), 12000);
     assert.equal(CWDecoder.usableRate(44100), 44000); // 0.2 % error is harmless
+    assert.equal(CWDecoder.usableRate(11025), 0);
     assert.equal(CWDecoder.usableRate(1000), 0);
+    assert.deepEqual(CWDecoder.ratePlan(12000), { rate: 12000, resample: false });
+    assert.deepEqual(CWDecoder.ratePlan(11025), { rate: 12000, resample: true });
+    assert.deepEqual(CWDecoder.ratePlan(1000), { rate: 0, resample: false });
 });
 
 test('greedy CTC collapses repeats, drops blanks, carries prev across chunks', () => {

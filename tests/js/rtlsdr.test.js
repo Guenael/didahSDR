@@ -136,6 +136,20 @@ test('CIC compensator keeps ±80 kHz within about 1 dB', () => {
     }
 });
 
+test('CIC N=5 rejects the alias at −384 kHz + 192 kHz − 50 kHz', () => {
+    const amp = 80;
+    const n = RTL_CAPTURE_RATE / 10;
+    const skip = 8192;
+    const wantedHz = 50000;
+    const wanted = toneAmp(runDecim(toneU8(-RTL_FS4_HZ + wantedHz, n, amp)), wantedHz, skip);
+    const aliasIn = runDecim(toneU8(-RTL_FS4_HZ + RTL_IQ_RATE - wantedHz, n, amp));
+    const aliasPos = toneAmp(aliasIn, wantedHz, skip);
+    const aliasNeg = toneAmp(aliasIn, -wantedHz, skip);
+    const alias = Math.max(aliasPos, aliasNeg);
+    const db = 20 * Math.log10(wanted / Math.max(alias, 1e-9));
+    assert.ok(db >= 40, `alias rejection ${db.toFixed(1)} dB`);
+});
+
 test('decimator phase continues across bulk buffers', () => {
     const u8 = toneU8(-RTL_FS4_HZ + 9000, 4096 * 8, 60);
     const one = runDecim(u8);
