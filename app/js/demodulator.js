@@ -271,16 +271,18 @@ class DidahDemodulator {
      */
     configure(p) {
         const prevOffset = this.offsetFreq;
+        const prevMod = this.modulation;
         if (p.offsetFreq !== undefined) this.offsetFreq = p.offsetFreq;
         if (p.modulation !== undefined) this.modulation = p.modulation.toLowerCase();
         if (p.cwBandwidth !== undefined) this.cwBandwidth = Math.max(30, Math.min(500, p.cwBandwidth));
         if (p.bfoPitch !== undefined) this.bfoPitch = Math.max(300, Math.min(1200, p.bfoPitch));
         this.updateFilters();
         this.squelch.setHangForMode(this.modulation);
-        this._resetAudioFx();
-        if (p.offsetFreq !== undefined && Math.abs(this.offsetFreq - prevOffset) > LARGE_RETUNE_HZ) {
-            this.agc.reset();
-        }
+        const modeChanged = this.modulation !== prevMod;
+        const jump = p.offsetFreq !== undefined && Math.abs(this.offsetFreq - prevOffset) > LARGE_RETUNE_HZ;
+        // A wheel tick must not wipe the NLMS weights. Mode changes and large retunes do.
+        if (modeChanged || jump) this._resetAudioFx();
+        if (jump) this.agc.reset();
     }
 
     /** @param {number} freq - tuned frequency relative to the IQ centre, Hz */
@@ -288,8 +290,10 @@ class DidahDemodulator {
         const prev = this.offsetFreq;
         this.offsetFreq = freq;
         this.updateFilters();
-        this._resetAudioFx();
-        if (Math.abs(freq - prev) > LARGE_RETUNE_HZ) this.agc.reset();
+        if (Math.abs(freq - prev) > LARGE_RETUNE_HZ) {
+            this._resetAudioFx();
+            this.agc.reset();
+        }
     }
 
     setModulation(mod) {

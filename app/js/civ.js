@@ -175,6 +175,7 @@ class Ic7300Cat {
         this.pttOnDtr = false;
         this._poll = null;
         this._reader = null;
+        this._readDone = null;
         this._writeChain = Promise.resolve();
         this._signalChain = Promise.resolve();
     }
@@ -225,19 +226,12 @@ class Ic7300Cat {
 
     async disconnect() {
         await this.releaseKey();
-        this.keepReading = false;
-        if (this._poll) {
-            clearInterval(this._poll);
-            this._poll = null;
+        const port = this.port;
+        await this._stopReader();
+        if (port) {
+            try { await port.close(); } catch (e) { /* already closed */ }
         }
-        if (this._reader) {
-            try { await this._reader.cancel(); } catch (e) { /* already closed */ }
-            this._reader = null;
-        }
-        if (this.port) {
-            try { await this.port.close(); } catch (e) { /* already closed */ }
-            this.port = null;
-        }
+        this.port = null;
         this.connected = false;
         this._linesSent = false;
         this.parser.reset();
@@ -310,18 +304,26 @@ class Ic7300Cat {
         this._write(civCommand(0x04));
     }
 
-    async _reopen() {
-        const port = this.port;
-        if (!port) return false;
+    async _stopReader() {
         this.keepReading = false;
         if (this._poll) {
             clearInterval(this._poll);
             this._poll = null;
         }
         if (this._reader) {
-            try { await this._reader.cancel(); } catch (e) { /* closing */ }
-            this._reader = null;
+            try { await this._reader.cancel(); } catch (e) { /* already closed */ }
         }
+        if (this._readDone) {
+            try { await this._readDone; } catch (e) { /* loop ended */ }
+            this._readDone = null;
+        }
+        this._reader = null;
+    }
+
+    async _reopen() {
+        const port = this.port;
+        if (!port) return false;
+        await this._stopReader();
         try { await port.close(); } catch (e) { /* not open */ }
         this.port = port;
         return this._open();
@@ -354,7 +356,11 @@ class Ic7300Cat {
         return true;
     }
 
-    async _readLoop() {
+    _readLoop() {
+        this._readDone = this._readBody();
+    }
+
+    async _readBody() {
         while (this.keepReading && this.port && this.port.readable) {
             let reader;
             try {

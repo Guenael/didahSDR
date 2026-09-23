@@ -193,6 +193,8 @@ class HorizontalWaterfall {
                     gl_FragColor = vec4(0.04, 0.04, 0.06, 1.0);
                     return;
                 }
+                // Sample the centre of the bin. Without the half-bin the carrier sits one bin high.
+                float dataX = texX + 0.5 / max(1.0, u_freqLen);
 
                 float row = (u_scrollPos - 0.5) - (1.0 - v_uv.x) * u_visibleCols;
                 float texY = fract(fract(row / u_timeRows) + 1.0);
@@ -204,7 +206,7 @@ class HorizontalWaterfall {
                 float bpp = abs(u_freqTop - u_freqBottom) * u_freqLen / max(1.0, u_viewH);
                 float taps = min(16.0, max(1.0, ceil(bpp)));
                 float texel = (u_freqTop - u_freqBottom) / max(1.0, u_viewH) / taps;
-                float x0 = texX - texel * (taps - 1.0) * 0.5;
+                float x0 = dataX - texel * (taps - 1.0) * 0.5;
                 float rawNorm = 0.0;
                 for (int i = 0; i < 16; i++) {
                     float fi = min(float(i), taps - 1.0);

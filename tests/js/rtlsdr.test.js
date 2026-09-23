@@ -195,6 +195,54 @@ test('rtlPickDevice opens the picker only when nothing granted matches', async (
     assert.ok(filters.some((f) => f.vendorId === 0x0bda && f.productId === 0x2832));
 });
 
+test('power off then on does not keep the previous USB read loop', async () => {
+    const src = new RtlSdrSource({ onRawIQ() {}, onStatusChange() {} });
+    let reads = 0;
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    src._com = {
+        resetBuffer: async () => {},
+        readBulk: () => {
+            reads++;
+            if (reads >= 3) return new Promise(() => {});
+            return gate.then(() => new Uint8Array(8));
+        }
+    };
+    src._decimator = { reset() {}, process() { return 0; } };
+    src._gen = 1;
+    src._stream();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(reads, 1);
+    src.stop();
+    src._stream();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(reads, 2);
+    release();
+    await gate;
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(reads, 3, 'only the new generation queues another read');
+});
+
+test('tune and gain share one hardware queue', async () => {
+    const src = new RtlSdrSource({ onStatusChange() {} });
+    const order = [];
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    src._enqueueHw(() => {
+        order.push('tune-start');
+        return gate.then(() => { order.push('tune-end'); });
+    });
+    src._enqueueHw(async () => { order.push('gain'); });
+    await Promise.resolve();
+    assert.deepEqual(order, ['tune-start']);
+    release();
+    await src._hwChain;
+    assert.deepEqual(order, ['tune-start', 'tune-end', 'gain']);
+});
+
 test('USB disconnect closes only the open stick', () => {
     const src = new RtlSdrSource({ onStatusChange() {} });
     const device = { vendorId: 0x0bda, productId: 0x2838 };

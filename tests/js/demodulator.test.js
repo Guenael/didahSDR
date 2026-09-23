@@ -102,11 +102,14 @@ test('a large retune resets the AGC; a wheel tick does not', () => {
     const d = new DidahDemodulator(RATE);
     d.agc.noiseFloor = 0.2;
     d.agc.gNext = 4;
+    d.autoNotch._lms.runP = 3;
     d.setOffsetFrequency(50);
     assert.equal(d.agc.noiseFloor, 0.2);
+    assert.equal(d.autoNotch._lms.runP, 3);
     d.setOffsetFrequency(50 + 200);
     assert.equal(d.agc.noiseFloor, 1e-3);
     assert.equal(d.agc.gNext, 1);
+    assert.equal(d.autoNotch._lms.runP, 0);
 });
 
 test('CW leaves a steady tone alone when the autonotch is enabled', () => {

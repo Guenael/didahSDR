@@ -79,6 +79,17 @@ function kiwiPortFromAuthority(raw, secure) {
 }
 
 /** Parse a MSG payload (bytes after the 'MSG' tag). First body byte is skipped, as in kiwiclient. */
+/** badp, too_busy, down, and inactivity are terminal: do not reconnect. */
+function kiwiTerminal(kv) {
+    if (!kv) return false;
+    if (kv.badp === '1' || kv.too_busy !== undefined || kv.down !== undefined) return true;
+    const keys = Object.keys(kv);
+    for (let i = 0; i < keys.length; i++) {
+        if (keys[i].indexOf('inactivity') === 0) return true;
+    }
+    return false;
+}
+
 function parseKiwiMsg(body) {
     const start = body.length > 0 ? 1 : 0;
     let text = '';
@@ -130,7 +141,7 @@ class KiwiConnection {
         this.ident = options.ident || 'didahSDR';
         this.lowCut = options.lowCut !== undefined ? options.lowCut : -5980;
         this.highCut = options.highCut !== undefined ? options.highCut : 5980;
-        this.startFreqHz = options.startFreqHz || 7100000;
+        this.startFreqHz = options.startFreqHz || 7018000;
 
         this.ws = null;
         this.connected = false;
@@ -170,9 +181,14 @@ class KiwiConnection {
                 if (typeof event.data === 'string') this._handleBytes(new TextEncoder().encode(event.data));
                 else this._handleBytes(new Uint8Array(event.data));
             };
+            const sock = this.ws;
             this.ws.onclose = () => {
+                if (this.ws === sock) this.ws = null;
                 this.connected = false;
                 this.handshakeComplete = false;
+                this._arOk = false;
+                this._haveSampleRate = false;
+                this._iqSetupSent = false;
                 this._stopKeepalive();
                 this.notifyStatus('Disconnected. Retrying...', false);
                 this._scheduleReconnect();
@@ -195,9 +211,12 @@ class KiwiConnection {
         clearReconnectTimer(this);
         this._stopKeepalive();
         if (this.ws) {
-            this.ws.onclose = null;
-            this.ws.close();
+            const sock = this.ws;
             this.ws = null;
+            sock.onclose = null;
+            if (sock.readyState === 0 || sock.readyState === 1) {
+                try { sock.close(); } catch (e) { /* already closing */ }
+            }
         }
         this.connected = false;
         this.handshakeComplete = false;
@@ -275,7 +294,8 @@ class KiwiConnection {
         this._send('SET compression=0');
         this._send(`SET ident_user=${this.ident}`);
         this._sendMod(this.ddcHz);
-        this._send('SET agc=1 hang=0 thresh=-90 slope=6 decay=1000 manGain=50');
+        // All six fields are required. A shorter command is a bad parameter and the server drops the socket.
+        this._send('SET agc=0 hang=0 thresh=-90 slope=6 decay=1000 manGain=50');
         this._send('SET squelch=0 max=0');
         this._send('SET keepalive');
         this._startKeepalive();
@@ -299,8 +319,23 @@ class KiwiConnection {
             }
             this._sendIqSetup();
         }
-        if (kv.badp === '1' || kv.too_busy !== undefined) {
-            this.notifyStatus('Kiwi busy or auth failed', false);
+        if (kiwiTerminal(kv)) {
+            this._wantConnect = false;
+            clearReconnectTimer(this);
+            this.connected = false;
+            this.handshakeComplete = false;
+            this._arOk = false;
+            this._haveSampleRate = false;
+            this._iqSetupSent = false;
+            this.notifyStatus('Kiwi busy or unavailable', false);
+            if (this.ws) {
+                const sock = this.ws;
+                this.ws = null;
+                sock.onclose = null;
+                if (sock.readyState === 0 || sock.readyState === 1) {
+                    try { sock.close(); } catch (e) { /* already closing */ }
+                }
+            }
         }
     }
 
@@ -311,7 +346,7 @@ class KiwiConnection {
 
 if (typeof module !== 'undefined') {
     module.exports = {
-        KiwiConnection, unpackKiwiSndIq, parseKiwiMsg, kiwiSndUrl, normalizeKiwiUrl,
+        KiwiConnection, unpackKiwiSndIq, parseKiwiMsg, kiwiSndUrl, normalizeKiwiUrl, kiwiTerminal,
         kiwiHostForUrl, KIWI_SND_FLAG_STEREO, KIWI_DEFAULT_PORT, KIWI_EXAMPLE_URL
     };
 }

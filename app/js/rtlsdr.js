@@ -718,6 +718,9 @@ class RtlSdrSource {
         this._tuner = null;
         this._front = 'tuner';
         this._reading = false;
+        this._gen = 0;
+        this._streamGen = -1;
+        this._hwChain = Promise.resolve();
         this._opening = null;
         this._freqTimer = null;
         this._tuneSeq = 0;
@@ -926,34 +929,52 @@ class RtlSdrSource {
         }
     }
 
+    _enqueueHw(fn) {
+        const run = this._hwChain.then(fn, fn);
+        this._hwChain = run.then(() => {}, () => {});
+        return run;
+    }
+
     _stream() {
-        if (this._reading || !this._com) return;
-        this._reading = true;
+        if (!this._com) return;
+        const gen = this._gen | 0;
+        if (this._streamGen === gen) return;
+        this._streamGen = gen;
         this.streaming = true;
         const com = this._com;
+        const alive = () => (this._gen | 0) === gen && this._com === com;
+        const stopThis = () => {
+            if (this._streamGen === gen) this.streaming = false;
+        };
         const loop = async () => {
             try {
                 await com.resetBuffer();
                 this._decimator.reset();
             } catch (e) {
-                if (this._reading) this._status('RTL-SDR buffer reset failed', false);
-                this._reading = false;
-                this.streaming = false;
+                if (alive()) this._status('RTL-SDR buffer reset failed', false);
+                stopThis();
+                return;
+            }
+            if (!alive()) {
+                stopThis();
                 return;
             }
             // One USB read is always in flight. The next transferIn is started
             // before demod, and it cannot complete until this turn yields, so the
             // current buffer stays valid for a synchronous processRawIQ.
+            // The captured generation stops a power-off/on from leaving the old loop running.
             const fail = () => {
-                if (!this._reading) return;
-                this._reading = false;
-                this.streaming = false;
+                if (!alive()) return;
+                stopThis();
                 this._status('USB read failed', false);
             };
             const kick = () => {
-                if (!this._reading || this._com !== com) return;
+                if (!alive()) {
+                    stopThis();
+                    return;
+                }
                 com.readBulk().then((src) => {
-                    if (!this._reading || this._com !== com) return;
+                    if (!alive()) return;
                     kick();
                     if (!src || src.length < 2 || !this.onRawIQ) return;
                     const ns = this._decimator.process(src, src.length, this._out);
@@ -966,12 +987,6 @@ class RtlSdrSource {
                 }, fail);
             };
             kick();
-            // The loop above is self-perpetuating. Park until stop/close clears _reading
-            // so _stream's caller contract (a running flag) stays true.
-            while (this._reading && this._com === com) {
-                await new Promise((resolve) => { setTimeout(resolve, 250); });
-            }
-            this.streaming = false;
         };
         loop();
     }
@@ -1084,24 +1099,25 @@ class RtlSdrSource {
     }
 
     _pushFrequency() {
-        this._tuneNow().catch((e) => {
+        this._enqueueHw(() => this._tuneNow()).catch((e) => {
             if (this.connected) this._status(e && e.message ? e.message : 'Tune failed', false);
         });
     }
 
     _pushPpm() {
-        this._applyPpm()
-            .then(() => this._applySampleRate())
-            .then(() => this._tuneNow())
-            .catch(() => {});
+        this._enqueueHw(async () => {
+            await this._applyPpm();
+            await this._applySampleRate();
+            await this._tuneNow();
+        }).catch(() => {});
     }
 
     _pushGain() {
-        this._applyGain().catch(() => {});
+        this._enqueueHw(() => this._applyGain()).catch(() => {});
     }
 
     _pushBias() {
-        this._applyBias().catch(() => {});
+        this._enqueueHw(() => this._applyBias()).catch(() => {});
     }
 }
 

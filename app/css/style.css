@@ -1159,7 +1159,7 @@ kbd {
     border-color: var(--accent-cyan);
 }
 
-.source-option:has(input:checked) {
+.source-option:has(input[name="iq-source"]:checked) {
     border-color: var(--accent-cyan);
     background: #102837;
 }

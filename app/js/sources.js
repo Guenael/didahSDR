@@ -7,6 +7,20 @@
  * to 192 kHz. Kiwi uses a direct SND connection in mod=iq. Presets are applied
  * when the operator picks a source.
  */
+/** 40 m CW segment. Kiwi opens here when the previous dial is not an HF frequency. */
+const KIWI_CW_HZ = 7018000;
+const KIWI_MIN_HZ = 10000;
+const KIWI_MAX_HZ = 30000000;
+
+// A user switch keeps the previous dial inside the Kiwi HF range (replay, RTL-SDR,
+// or a known IC-7300 VFO). Sound-card offsets, VHF, and a cold start use KIWI_CW_HZ.
+function kiwiEntryFrequency(prev) {
+    if (!prev || !prev.fromUser) return KIWI_CW_HZ;
+    const hz = prev.protocol === 'ic7300' ? (prev.radioHz || 0) : (prev.tunedFreq || 0);
+    if (hz >= KIWI_MIN_HZ && hz <= KIWI_MAX_HZ) return Math.round(hz);
+    return KIWI_CW_HZ;
+}
+
 const SOURCES = [
     {
         id: 'va2gka',
@@ -41,7 +55,7 @@ const SOURCES = [
         minLevel: -90,
         dynamicRange: 50,
         fftSize: 2048,
-        startFreq: 7100000,
+        startFreq: KIWI_CW_HZ,
         startMod: 'cw',
         iqLowCut: -5980,
         iqHighCut: 5980,
@@ -75,4 +89,4 @@ function findSource(id) {
     return SOURCES.find((s) => s.id === id) || SOURCES[0];
 }
 
-if (typeof module !== 'undefined') module.exports = { SOURCES, findSource };
+if (typeof module !== 'undefined') module.exports = { SOURCES, findSource, kiwiEntryFrequency, KIWI_CW_HZ };

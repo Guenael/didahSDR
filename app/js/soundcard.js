@@ -193,6 +193,7 @@ class SoundcardSource {
             } catch (e) {
                 stream = await this._gum(deviceId, {});
             }
+            this.stream = stream;
             const track = stream.getAudioTracks()[0];
             if (track && track.applyConstraints) {
                 try {
@@ -215,36 +216,34 @@ class SoundcardSource {
             } catch (e) {
                 ctx = new AudioCtx();
             }
+            this.ctx = ctx;
             if (!isSoundRate(ctx.sampleRate)) {
-                try { await ctx.close(); } catch (e) { /* ignore */ }
+                await this._abandon(null, ctx);
                 try { ctx = new AudioCtx({ sampleRate: 48000 }); } catch (e2) { ctx = new AudioCtx(); }
+                this.ctx = ctx;
             }
             if (!isSoundRate(ctx.sampleRate)) {
                 const got = ctx.sampleRate;
-                stream.getTracks().forEach((t) => t.stop());
-                try { await ctx.close(); } catch (e) { /* ignore */ }
+                await this._abandon(stream, ctx);
                 this._status('AudioContext is ' + got + ' Hz; need 48, 96 or 192 kHz.', false);
                 return;
             }
             await ctx.resume();
             if (!ctx.audioWorklet) {
-                stream.getTracks().forEach((t) => t.stop());
-                ctx.close();
+                await this._abandon(stream, ctx);
                 this._status('Sound card capture needs AudioWorklet.', false);
                 return;
             }
 
             if (gen !== this._gen) {
-                stream.getTracks().forEach((t) => t.stop());
-                try { await ctx.close(); } catch (e) { /* switched away */ }
+                await this._abandon(stream, ctx);
                 return;
             }
             const trackInfo = this._readTrack(stream);
             await ctx.audioWorklet.addModule('js/soundcard.js');
             await ctx.audioWorklet.addModule('js/audio_capture_worklet.js');
             if (gen !== this._gen) {
-                stream.getTracks().forEach((t) => t.stop());
-                try { await ctx.close(); } catch (e) { /* switched away */ }
+                await this._abandon(stream, ctx);
                 return;
             }
             const sourceNode = ctx.createMediaStreamSource(stream);
@@ -304,6 +303,18 @@ class SoundcardSource {
         this._gen++;
         this.connected = false;
         await this._shutdown();
+    }
+
+    /** Stop a capture that this start() still owns. A newer start keeps its own stream. */
+    async _abandon(stream, ctx) {
+        if (stream) {
+            if (this.stream === stream) this.stream = null;
+            stream.getTracks().forEach((t) => t.stop());
+        }
+        if (ctx) {
+            if (this.ctx === ctx) this.ctx = null;
+            try { await ctx.close(); } catch (e) { /* already closed */ }
+        }
     }
 
     async _shutdown() {

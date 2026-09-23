@@ -113,6 +113,12 @@ class WavIQLooper:
     def _advance_read_pos(self):
         self._read_pos = (self._read_pos + min(self.block_bytes, self.data_bytes)) % self.data_bytes
 
+    def _reserve_block_pos(self) -> int:
+        """Claim the next block offset before the read, so a sync fallback cannot repeat it."""
+        pos = self._read_pos
+        self._advance_read_pos()
+        return pos
+
     def _take_next_block(self):
         """Moves the next prefetched block into `_cur`; reads synchronously if the queue is empty."""
         if self._blocks:
@@ -146,8 +152,8 @@ class WavIQLooper:
         loop = asyncio.get_running_loop()
         while True:
             if len(self._blocks) < self.prefetch_blocks:
-                block = await loop.run_in_executor(None, self._read_block, self._read_pos)
-                self._advance_read_pos()
+                pos = self._reserve_block_pos()
+                block = await loop.run_in_executor(None, self._read_block, pos)
                 self._blocks.append(block)
             else:
                 await asyncio.sleep(0.1)

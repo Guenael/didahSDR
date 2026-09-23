@@ -24,10 +24,20 @@ function acceptIq(activeProtocol, ownerProtocol, connected, gen, feedGen) {
     return gen === feedGen;
 }
 
+/** Keep the spectrum ring index inside the buffer. A hidden tab used to let it go negative. */
+function capRingAvailable(available, ringSize) {
+    const n = available | 0;
+    const cap = ringSize | 0;
+    if (n > cap) return cap;
+    if (n < 0) return 0;
+    return n;
+}
+
 if (typeof globalThis !== 'undefined') {
     globalThis.SOURCE_POLICY = SOURCE_POLICY;
     globalThis.acceptIq = acceptIq;
+    globalThis.capRingAvailable = capRingAvailable;
 }
 if (typeof module !== 'undefined') {
-    module.exports = { SOURCE_POLICY, acceptIq };
+    module.exports = { SOURCE_POLICY, acceptIq, capRingAvailable };
 }

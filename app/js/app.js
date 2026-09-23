@@ -360,10 +360,12 @@ document.addEventListener('DOMContentLoaded', () => {
             ringImag[ringHead] = iq[i * 2 + 1];
             ringHead = ringHead === RING_SIZE - 1 ? 0 : ringHead + 1;
         }
-        samplesAvailable += numComplex;
+        samplesAvailable = capRingAvailable(samplesAvailable + numComplex, RING_SIZE);
 
         // Column rate stays a true time axis: WF Speed is still the STFT hop, and a
         // cap keeps 192 kHz from asking for hundreds of WebGL uploads per second.
+        // A hidden tab skips the FFT; the ring index stays capped so it cannot go negative.
+        if (typeof document !== 'undefined' && document.hidden) return;
         consumeSpectrumSlices();
     }
 
@@ -376,11 +378,12 @@ document.addEventListener('DOMContentLoaded', () => {
         return Math.max(1, bySpeed, byCap);
     }
 
-    function paintSpectrum(specDb, mag2, sampleRate, centerFreq) {
+    function paintSpectrum(specDb, mag2, sampleRate, centerFreq, hopSamples) {
         const shown = state.filterEnabled ? cwFilter.process(specDb) : specDb;
         waterfall.addSlice(shown);
         smeter.updateFromSpectrum(
-            mag2, sampleRate, centerFreq, state.tunedFreq, state.modulation, state.cwBandwidth, clientFft.enbw
+            mag2, sampleRate, centerFreq, state.tunedFreq, state.modulation, state.cwBandwidth,
+            clientFft.enbw, hopSamples
         );
     }
 
@@ -396,7 +399,7 @@ document.addEventListener('DOMContentLoaded', () => {
         while (samplesAvailable >= n) {
             const start = (ringHead - samplesAvailable + RING_SIZE) % RING_SIZE;
             const specDb = clientFft.computeSpectrumFromRing(ringReal, ringImag, RING_SIZE, start, true);
-            paintSpectrum(specDb, clientFft.mag2Buffer, state.sampleRate, state.centerFreq);
+            paintSpectrum(specDb, clientFft.mag2Buffer, state.sampleRate, state.centerFreq, hopSize);
             samplesAvailable -= hopSize;
         }
     }
@@ -409,7 +412,7 @@ document.addEventListener('DOMContentLoaded', () => {
         waterfall.addSlice(shown);
         smeter.updateFromSpectrum(
             qrss.fft.mag2Buffer, qrss.outRate, state.tunedFreq, state.tunedFreq,
-            state.modulation, state.cwBandwidth, qrss.fft.enbw
+            state.modulation, state.cwBandwidth, qrss.fft.enbw, qrss.hop
         );
     }
 
@@ -896,8 +899,38 @@ document.addEventListener('DOMContentLoaded', () => {
      * The one place demod / waterfall / server state is updated from a new VFO frequency.
      * @param {boolean} fromUser - false only for server-config or internal re-application
      */
+    let tuneResetTimer = null;
+    let pendingTuneHz = 0;      // net retune since the last decoder / NLMS reset
+    function flushTuneReset() {
+        if (tuneResetTimer) {
+            clearTimeout(tuneResetTimer);
+            tuneResetTimer = null;
+        }
+        pendingTuneHz = 0;
+        demodulator._resetAudioFx();
+        cwDecoder.reset();
+    }
+    /**
+     * Large steps and mode changes reset now. Small steps add up; once the dial rests for
+     * 300 ms, reset only if the net move exceeds LARGE_RETUNE_HZ (the model tolerates ±200 Hz).
+     */
+    function noteTuneReset(deltaHz, immediate) {
+        pendingTuneHz += deltaHz;
+        if (immediate || Math.abs(deltaHz) > LARGE_RETUNE_HZ) {
+            flushTuneReset();
+            return;
+        }
+        if (tuneResetTimer) clearTimeout(tuneResetTimer);
+        tuneResetTimer = setTimeout(() => {
+            tuneResetTimer = null;
+            if (Math.abs(pendingTuneHz) > LARGE_RETUNE_HZ) flushTuneReset();
+        }, 300);
+    }
+
     function setTunedFrequency(freq, updateDial = true, fromUser = true) {
         if (fromUser && source.protocol === 'ic7300') return;
+        const prevTuned = state.tunedFreq;
+        const prevMod = demodulator.modulation;
         state.tunedFreq = Math.round(freq);
         if (fromUser) state.userHasTuned = true;
         if (updateDial) {
@@ -934,6 +967,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         waterfall.setTunedFreq(state.tunedFreq, state.lowCut, state.highCut, state.modulation);
+        noteTuneReset(state.tunedFreq - prevTuned, state.modulation !== prevMod);
         if (state.qrssEnabled) {
             qrss.reset();
             waterfall.zoom = 1;
@@ -941,7 +975,6 @@ document.addEventListener('DOMContentLoaded', () => {
             waterfall.setCenterFreq(state.tunedFreq, qrss.outRate || 375);
             waterfall.clear();
         }
-        cwDecoder.reset();
         sendDspControl();
     }
 
@@ -1115,6 +1148,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const src = findSource(id);
         const switching = src.id !== source.id;
         const prevProtocol = source.protocol;
+        const prevTuned = state.tunedFreq;
+        const prevRadio = state.ic7300RadioHz;
         source = src;
         state.selectedSourceId = src.id;
         document.querySelectorAll('input[name="iq-source"]').forEach((el) => {
@@ -1135,11 +1170,19 @@ document.addEventListener('DOMContentLoaded', () => {
         resetIqPipeline();
         lastDspControl = '';
         state.userHasTuned = false;
-        state.tunedFreq = src.startFreq;
+        const entryHz = src.protocol === 'kiwi'
+            ? kiwiEntryFrequency({
+                protocol: prevProtocol,
+                tunedFreq: prevTuned,
+                radioHz: prevRadio,
+                fromUser: !!fromUser
+            })
+            : src.startFreq;
+        state.tunedFreq = entryHz;
         if (src.protocol === 'kiwi') {
-            state.centerFreq = src.startFreq;
+            state.centerFreq = entryHz;
             applyIqRate(12000);
-            if (kiwi) kiwi.ddcHz = src.startFreq;
+            if (kiwi) kiwi.ddcHz = entryHz;
         } else if (src.protocol === 'soundcard') {
             state.centerFreq = 0;
             applyIqRate((sound && sound.sampleRate) || 96000);
@@ -1201,9 +1244,7 @@ document.addEventListener('DOMContentLoaded', () => {
             wasTransmitting = false;
             audioPlayer.stop();
             smeter.reset();
-            if (source.protocol === 'soundcard' && sound) sound.stop();
-            if (source.protocol === 'ic7300' && ic7300) ic7300.stop();
-            if (source.protocol === 'rtlsdr' && rtl) rtl.stop();
+            disconnectTransports();
             syncIc7300Key();
             updateTrxLeds();
         }

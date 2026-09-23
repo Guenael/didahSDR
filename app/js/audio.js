@@ -17,7 +17,7 @@ class WebAudioPlayer {
 
         this.volume = 0.8;
         this.muted = false;
-        this.INPUT_RATE = 48000;     // demodulator output rate; the context is asked for the same rate
+        this.INPUT_RATE = 48000;     // demodulator output rate; the AudioContext stays at 48 kHz
 
         this.onStateChange = null;
         this.onLevel = null;
@@ -41,7 +41,7 @@ class WebAudioPlayer {
             return this.initPromise;
         }
         try {
-            this.ctx = new AudioCtx({ sampleRate: this.INPUT_RATE, latencyHint: 'interactive' });
+            this.ctx = new AudioCtx({ sampleRate: 48000, latencyHint: 'interactive' });
         } catch (e) {
             try {
                 this.ctx = new AudioCtx({ latencyHint: 'interactive' });

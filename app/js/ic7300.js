@@ -149,6 +149,7 @@ class Ic7300Source {
             } catch (e) {
                 stream = await this._gum(deviceId, {});
             }
+            this.stream = stream;
             const track = stream.getAudioTracks()[0];
             const settings = (track && track.getSettings && track.getSettings()) || {};
             this.trackRate = Math.round(Number(settings.sampleRate) || 0);
@@ -161,25 +162,23 @@ class Ic7300Source {
             } catch (e) {
                 ctx = new AudioCtx();
             }
+            this.ctx = ctx;
             await ctx.resume();
             if (!ctx.audioWorklet) {
-                stream.getTracks().forEach((t) => t.stop());
-                try { await ctx.close(); } catch (err) { /* ignore */ }
+                await this._abandon(stream, ctx);
                 this._status('IC-7300 capture needs AudioWorklet.', false);
                 return;
             }
 
             if (gen !== this._gen) {
-                stream.getTracks().forEach((t) => t.stop());
-                try { await ctx.close(); } catch (err) { /* switched away */ }
+                await this._abandon(stream, ctx);
                 return;
             }
             await ctx.audioWorklet.addModule('js/demodulator.js');
             await ctx.audioWorklet.addModule('js/ic7300_if.js');
             await ctx.audioWorklet.addModule('js/audio_capture_worklet.js');
             if (gen !== this._gen) {
-                stream.getTracks().forEach((t) => t.stop());
-                try { await ctx.close(); } catch (err) { /* switched away */ }
+                await this._abandon(stream, ctx);
                 return;
             }
             const sourceNode = ctx.createMediaStreamSource(stream);
@@ -244,6 +243,18 @@ class Ic7300Source {
         this._gen++;
         this.connected = false;
         await this._shutdown();
+    }
+
+    /** Stop a capture that this start() still owns. A newer start keeps its own stream. */
+    async _abandon(stream, ctx) {
+        if (stream) {
+            if (this.stream === stream) this.stream = null;
+            stream.getTracks().forEach((t) => t.stop());
+        }
+        if (ctx) {
+            if (this.ctx === ctx) this.ctx = null;
+            try { await ctx.close(); } catch (e) { /* already closed */ }
+        }
     }
 
     async _shutdown() {

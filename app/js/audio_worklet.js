@@ -72,9 +72,10 @@ class DidahAudioEngine {
 
         // Jitter targets. WebSocket delivery bursts by up to ~±40 ms around the 25 ms server cadence,
         // so the steady-state level must sit well above that burst amplitude.
-        // - target: ~128 ms held by drift compensation; - minPrebuffer: ~85 ms before (re)starting.
+        // - target and minPrebuffer: ~128 ms. Playback starts once that much audio is queued.
         this.targetBuffer = 6144;
-        this.minPrebuffer = 4096;
+        this.minPrebuffer = 6144;
+        this.levelEma = 6144;
         this.prebuffering = true;
 
         // Click-free underrun handling: exponential fade-out of the last sample when the buffer runs
@@ -101,10 +102,25 @@ class DidahAudioEngine {
     }
 
     _syncBufferTargets() {
-        // ~128 ms target / ~85 ms prebuffer, relative to the demodulator output rate
+        // ~128 ms at the demodulator output rate. Prebuffer matches the target so
+        // playback does not start and immediately hunt.
         const rate = this.inputRate || 48000;
         this.targetBuffer = Math.max(512, Math.round(rate * 0.128));
-        this.minPrebuffer = Math.max(256, Math.round(rate * 0.085));
+        this.minPrebuffer = this.targetBuffer;
+        this.levelEma = this.targetBuffer;
+    }
+
+    /** Drop oldest audio so `keep` samples remain, and fade back in. */
+    _keepNewest(keep) {
+        const R = this.RING_SIZE;
+        const n = Math.max(1, Math.min(keep | 0, R - 1));
+        let rp = this.writePos - n;
+        if (rp < 0) rp += R;
+        this.readPos = rp;
+        this.buffered = n;
+        this.levelEma = n;
+        this.fadeInPos = 0;
+        this.prebuffering = false;
     }
 
     setInputRate(rate) {
@@ -127,9 +143,16 @@ class DidahAudioEngine {
             w = w === R - 1 ? 0 : w + 1;
         }
         this.writePos = w;
-        if (this.buffered + n > R) this.stats.overflows++;
-        this.buffered = Math.min(R, this.buffered + n);
-        if (this.prebuffering && this.buffered >= this.minPrebuffer) this.prebuffering = false;
+        if (this.buffered + n > R) {
+            this.stats.overflows++;
+            this._keepNewest(this.targetBuffer);
+        } else {
+            this.buffered += n;
+            if (this.prebuffering && this.buffered >= this.minPrebuffer) {
+                this.prebuffering = false;
+                this.levelEma = this.buffered;
+            }
+        }
     }
 
     reset() {
@@ -139,6 +162,7 @@ class DidahAudioEngine {
         this.prebuffering = true;
         this.fadeInPos = 0;
         this.lastSample = 0.0;
+        this.levelEma = this.targetBuffer;
     }
 
     /**
@@ -153,6 +177,8 @@ class DidahAudioEngine {
         if (this.buffered < st.minBuf) st.minBuf = this.buffered;
         if (this.buffered > st.maxBuf) st.maxBuf = this.buffered;
 
+        if (this.buffered > 2 * this.targetBuffer) this._keepNewest(this.targetBuffer);
+
         const taps = this.POLY_TAPS;
         const aheadNeed = taps / 2 + 1;
         // Prebuffering or starving: fade the last sample out instead of cutting hard
@@ -166,9 +192,14 @@ class DidahAudioEngine {
             return 0.0;
         }
 
-        // Clock drift compensation: ±0.5 % playback-rate trim toward the target latency
-        const drift = (this.buffered - this.targetBuffer) * 0.00002;
-        const step = nominalStep * (1.0 + Math.max(-0.005, Math.min(0.005, drift)));
+        // Drift trim: 1 s EMA of the buffer level, gain small enough that the
+        // ±0.1 % clamp is the limit, not the normal state. Beyond 2× target, render() resyncs.
+        const dt = outLen / this.outputRate;
+        const alpha = 1 - Math.exp(-dt);
+        this.levelEma += alpha * (this.buffered - this.levelEma);
+        const span = 2 * this.targetBuffer;
+        const trim = Math.max(-0.001, Math.min(0.001, (this.levelEma - this.targetBuffer) * (0.001 / span)));
+        const step = nominalStep * (1.0 + trim);
 
         const ring = this.ring, R = this.RING_SIZE, fadeLen = this.FADE_IN;
         const h = this.poly;

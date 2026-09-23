@@ -85,6 +85,29 @@ def test_chunk_samples_44100_sums_to_one_second():
     assert abs(acc) < 1e-6
 
 
+def test_prefetch_reserves_the_block_before_reading(tmp_path):
+    """The sync fallback must not re-read a block the prefetch task has already claimed."""
+    import wave
+
+    frames = 96000
+    pcm = bytes(i % 251 for i in range(frames * 4))
+    wav_path = tmp_path / "prefetch.wav"
+    with wave.open(str(wav_path), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(96000)
+        w.writeframes(pcm)
+
+    looper = WavIQLooper(str(wav_path), block_bytes=4096, prefetch_blocks=2)
+    pos = looper._reserve_block_pos()
+    assert pos == 0
+    assert looper._read_pos == 4096
+    reserved = looper._read_block(pos)
+    fallback = looper._read_block(looper._read_pos)
+    assert reserved != fallback
+    looper.close()
+
+
 def test_enqueue_drops_oldest_when_full():
     queue = asyncio.Queue(maxsize=2)
     enqueue_packet(queue, b"a")

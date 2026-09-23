@@ -32,7 +32,6 @@ class DidahSMeter {
         this.currentSnr = 0.0;
         this.peakSnr = 0.0;
         this.peakHoldUntil = 0;
-        this.lastUpdateTime = 0;
         this.lastRenderTime = 0;
         this.noiseScratch = new Float32Array(256);
     }
@@ -167,18 +166,19 @@ class DidahSMeter {
      * Compute instantaneous SNR and update the meter ballistics / DOM.
      * `mag2` is the linear fftshifted power buffer.
      */
-    updateFromSpectrum(mag2, sampleRate, centerFreq, tunedFreq, modulation, bandwidth, enbw) {
+    updateFromSpectrum(mag2, sampleRate, centerFreq, tunedFreq, modulation, bandwidth, enbw, hopSamples) {
         if (!this.visible || !this.container) return;
         const rawSnrDb = this.computeSnrDb(mag2, sampleRate, centerFreq, tunedFreq, modulation, bandwidth, enbw);
         if (rawSnrDb == null || !Number.isFinite(rawSnrDb)) return;
-        this.applyBallistics(rawSnrDb);
+        const hop = hopSamples > 0 ? hopSamples : 0;
+        const dt = hop > 0 && sampleRate > 0 ? hop / sampleRate : 0.02;
+        this.applyBallistics(rawSnrDb, dt);
         this.render();
     }
 
-    applyBallistics(rawSnrDb) {
+    applyBallistics(rawSnrDb, dtSec) {
+        const dt = Math.min(0.1, Math.max(0.001, dtSec || 0.02));
         const now = performance.now();
-        const dt = this.lastUpdateTime ? Math.min(0.1, Math.max(0.005, (now - this.lastUpdateTime) * 0.001)) : 0.02;
-        this.lastUpdateTime = now;
 
         // Asymmetric attack/decay:
         // - Fast attack (~20ms) captures short Morse dits and sharp transient syllables

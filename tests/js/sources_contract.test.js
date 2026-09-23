@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { req } = require('./load.js');
 
-const { acceptIq } = req('sources_controller.js');
+const { acceptIq, capRingAvailable } = req('sources_controller.js');
 const { createSabRing, sabWrite, sabRead } = req('audio_ring.js');
 
 test('acceptIq drops inactive sources and stale generations', () => {
@@ -13,6 +13,12 @@ test('acceptIq drops inactive sources and stale generations', () => {
     assert.equal(acceptIq('soundcard', 'soundcard', true, 2, 2), true);
     assert.equal(acceptIq('didah', 'didah', true, null, null), true);
     assert.equal(acceptIq('rtlsdr', 'rtlsdr', true, 0, 0), true);
+});
+
+test('capRingAvailable stays inside the spectrum ring', () => {
+    assert.equal(capRingAvailable(100, 32768), 100);
+    assert.equal(capRingAvailable(40000, 32768), 32768);
+    assert.equal(capRingAvailable(-4, 32768), 0);
 });
 
 test('SAB ring round-trips floats and leaves one slot empty', () => {
