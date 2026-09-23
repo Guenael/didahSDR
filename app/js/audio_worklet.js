@@ -1,8 +1,9 @@
 /**
  * didahSDR - Audio output engine, running inside an AudioWorklet.
  *
- * DidahAudioEngine holds the jitter ring buffer, fractional resampler with clock-drift
- * compensation, prebuffer/underrun handling with click-free fades, and diagnostics counters.
+ * DidahAudioEngine holds the jitter ring buffer, a 16-tap 64-phase windowed-sinc
+ * resampler with clock-drift compensation, prebuffer/underrun handling with click-free
+ * fades, and diagnostics counters. The channel rate is ~12 kHz, so playback upsamples.
  * It is a plain class so Node tests can drive it; the AudioWorkletProcessor below is a thin
  * wrapper that feeds it from `port` messages and renders into the output block.
  * Sidetone: `audio.js` addModule's `cw_keyer.js` first so `globalThis.CwKeyer` exists here.
@@ -51,6 +52,12 @@ function renderSidetoneOrRx(txState, engine, keyer, out, sampleRate, sidetoneHz,
     return engine.render(out);
 }
 
+function resamplerApi() {
+    if (globalThis.designPolyphase && globalThis.POLY_TAPS) return globalThis;
+    if (typeof require === 'function') return require('./resampler.js');
+    throw new Error('didahSDR resampler was not loaded');
+}
+
 class DidahAudioEngine {
     constructor(inputRate = 48000, outputRate = 48000) {
         this.inputRate = inputRate;
@@ -65,9 +72,10 @@ class DidahAudioEngine {
 
         // Jitter targets. WebSocket delivery bursts by up to ~±40 ms around the 25 ms server cadence,
         // so the steady-state level must sit well above that burst amplitude.
-        // - target: ~128 ms held by drift compensation; - minPrebuffer: ~85 ms before (re)starting.
+        // - target and minPrebuffer: ~128 ms. Playback starts once that much audio is queued.
         this.targetBuffer = 6144;
-        this.minPrebuffer = 4096;
+        this.minPrebuffer = 6144;
+        this.levelEma = 6144;
         this.prebuffering = true;
 
         // Click-free underrun handling: exponential fade-out of the last sample when the buffer runs
@@ -77,14 +85,42 @@ class DidahAudioEngine {
         this.lastSample = 0.0;
 
         this.stats = { blocks: 0, underruns: 0, overflows: 0, minBuf: Infinity, maxBuf: 0 };
+        this.poly = null;
+        this.POLY_TAPS = 16;
+        this.POLY_PHASES = 64;
+        this.POLY_CENTER = 7;
         this._syncBufferTargets();
+        this._buildPolyphase();
+    }
+
+    _buildPolyphase() {
+        const api = resamplerApi();
+        this.POLY_TAPS = api.POLY_TAPS;
+        this.POLY_PHASES = api.POLY_PHASES;
+        this.POLY_CENTER = api.POLY_CENTER;
+        this.poly = api.designPolyphase(this.inputRate, this.outputRate);
     }
 
     _syncBufferTargets() {
-        // ~128 ms target / ~85 ms prebuffer, relative to the demodulator output rate
+        // ~128 ms at the demodulator output rate. Prebuffer matches the target so
+        // playback does not start and immediately hunt.
         const rate = this.inputRate || 48000;
         this.targetBuffer = Math.max(512, Math.round(rate * 0.128));
-        this.minPrebuffer = Math.max(256, Math.round(rate * 0.085));
+        this.minPrebuffer = this.targetBuffer;
+        this.levelEma = this.targetBuffer;
+    }
+
+    /** Drop oldest audio so `keep` samples remain, and fade back in. */
+    _keepNewest(keep) {
+        const R = this.RING_SIZE;
+        const n = Math.max(1, Math.min(keep | 0, R - 1));
+        let rp = this.writePos - n;
+        if (rp < 0) rp += R;
+        this.readPos = rp;
+        this.buffered = n;
+        this.levelEma = n;
+        this.fadeInPos = 0;
+        this.prebuffering = false;
     }
 
     setInputRate(rate) {
@@ -92,12 +128,13 @@ class DidahAudioEngine {
         if (next === this.inputRate) return;
         this.inputRate = next;
         this._syncBufferTargets();
+        this._buildPolyphase();
         this.reset();
     }
 
     /** Enqueue mono float samples. */
-    push(samples) {
-        const n = samples.length;
+    push(samples, count) {
+        const n = count == null ? samples.length : count;
         if (n === 0) return;
         const ring = this.ring, R = this.RING_SIZE;
         let w = this.writePos;
@@ -106,9 +143,16 @@ class DidahAudioEngine {
             w = w === R - 1 ? 0 : w + 1;
         }
         this.writePos = w;
-        if (this.buffered + n > R) this.stats.overflows++;
-        this.buffered = Math.min(R, this.buffered + n);
-        if (this.prebuffering && this.buffered >= this.minPrebuffer) this.prebuffering = false;
+        if (this.buffered + n > R) {
+            this.stats.overflows++;
+            this._keepNewest(this.targetBuffer);
+        } else {
+            this.buffered += n;
+            if (this.prebuffering && this.buffered >= this.minPrebuffer) {
+                this.prebuffering = false;
+                this.levelEma = this.buffered;
+            }
+        }
     }
 
     reset() {
@@ -118,6 +162,7 @@ class DidahAudioEngine {
         this.prebuffering = true;
         this.fadeInPos = 0;
         this.lastSample = 0.0;
+        this.levelEma = this.targetBuffer;
     }
 
     /**
@@ -132,8 +177,12 @@ class DidahAudioEngine {
         if (this.buffered < st.minBuf) st.minBuf = this.buffered;
         if (this.buffered > st.maxBuf) st.maxBuf = this.buffered;
 
+        if (this.buffered > 2 * this.targetBuffer) this._keepNewest(this.targetBuffer);
+
+        const taps = this.POLY_TAPS;
+        const aheadNeed = taps / 2 + 1;
         // Prebuffering or starving: fade the last sample out instead of cutting hard
-        if (this.prebuffering || this.buffered < outLen * nominalStep) {
+        if (this.prebuffering || this.buffered < Math.max(outLen * nominalStep, aheadNeed)) {
             if (!this.prebuffering) st.underruns++;
             this.prebuffering = true;
             this.fadeInPos = 0;
@@ -143,15 +192,23 @@ class DidahAudioEngine {
             return 0.0;
         }
 
-        // Clock drift compensation: ±0.5 % playback-rate trim toward the target latency
-        const drift = (this.buffered - this.targetBuffer) * 0.00002;
-        const step = nominalStep * (1.0 + Math.max(-0.005, Math.min(0.005, drift)));
+        // Drift trim: 1 s EMA of the buffer level, gain small enough that the
+        // ±0.1 % clamp is the limit, not the normal state. Beyond 2× target, render() resyncs.
+        const dt = outLen / this.outputRate;
+        const alpha = 1 - Math.exp(-dt);
+        this.levelEma += alpha * (this.buffered - this.levelEma);
+        const span = 2 * this.targetBuffer;
+        const trim = Math.max(-0.001, Math.min(0.001, (this.levelEma - this.targetBuffer) * (0.001 / span)));
+        const step = nominalStep * (1.0 + trim);
 
         const ring = this.ring, R = this.RING_SIZE, fadeLen = this.FADE_IN;
+        const h = this.poly;
+        const phases = this.POLY_PHASES;
+        const center = this.POLY_CENTER;
         let rPos = this.readPos, consumed = 0, peak = 0, fadePos = this.fadeInPos, last = this.lastSample;
 
         for (let i = 0; i < outLen; i++) {
-            if (this.buffered - consumed < 2) {
+            if (this.buffered - consumed < aheadNeed) {
                 if (!this.prebuffering) st.underruns++;
                 this.prebuffering = true;
                 fadePos = 0;
@@ -160,10 +217,22 @@ class DidahAudioEngine {
                 continue;
             }
             const i0 = Math.floor(rPos);
-            const idx0 = i0 >= R ? i0 - R : i0;
-            const idx1 = idx0 === R - 1 ? 0 : idx0 + 1;
             const frac = rPos - i0;
-            let s = ring[idx0] * (1.0 - frac) + ring[idx1] * frac;   // linear interpolation
+            let p0 = Math.floor(frac * phases);
+            let blend = frac * phases - p0;
+            if (p0 >= phases) { p0 = phases - 1; blend = 1; }
+            const row0 = p0 * taps;
+            const row1 = row0 + taps;
+            let s0 = 0, s1 = 0;
+            for (let k = 0; k < taps; k++) {
+                let idx = i0 - center + k;
+                if (idx >= R) idx -= R;
+                else if (idx < 0) idx += R;
+                const x = ring[idx];
+                s0 += h[row0 + k] * x;
+                s1 += h[row1 + k] * x;
+            }
+            let s = s0 + (s1 - s0) * blend;
             if (fadePos < fadeLen) { s *= fadePos / fadeLen; fadePos++; }
             out[i] = s;
             last = s;
@@ -193,9 +262,10 @@ class DidahAudioEngine {
 
 if (typeof registerProcessor !== 'undefined') {
     class DidahAudioProcessor extends AudioWorkletProcessor {
-        constructor() {
+        constructor(options) {
             super();
-            this.engine = new DidahAudioEngine(48000, sampleRate);   // `sampleRate` is the worklet global
+            const inRate = options && options.processorOptions && options.processorOptions.inputRate;
+            this.engine = new DidahAudioEngine(inRate || 48000, sampleRate);   // `sampleRate` is the worklet global
             const Keyer = globalThis.CwKeyer;
             this.keyer = typeof Keyer === 'function' ? new Keyer() : null;
             this.txState = { wasTx: false };
@@ -227,6 +297,11 @@ if (typeof registerProcessor !== 'undefined') {
         }
 
         onMessage(m) {
+            if (m && m.type === 'sab' && m.sab && typeof sabViews === 'function') {
+                this.sab = sabViews(m.sab);
+                this.sabScratch = new Float32Array(2048);
+                return;
+            }
             if (m instanceof Float32Array) {
                 if (!this.txState.wasTx) this.engine.push(m);
                 return;
@@ -260,6 +335,11 @@ if (typeof registerProcessor !== 'undefined') {
                 case 'arm':
                     k.armed = !!m.on;
                     k.stopText = !k.armed;
+                    if (!k.armed) {
+                        k.setPaddle('dit', false);
+                        k.setPaddle('dah', false);
+                        k.setStraight(false);
+                    }
                     break;
                 case 'hasText':
                     this.hasText = !!m.on;
@@ -294,6 +374,15 @@ if (typeof registerProcessor !== 'undefined') {
         }
 
         process(inputs, outputs) {
+            if (this.sab && !this.txState.wasTx) {
+                const scratch = this.sabScratch;
+                let n = sabRead(this.sab, scratch);
+                while (n > 0) {
+                    this.engine.push(scratch, n);
+                    if (n < scratch.length) break;
+                    n = sabRead(this.sab, scratch);
+                }
+            }
             const out = outputs[0][0];
             const peak = renderSidetoneOrRx(
                 this.txState, this.engine, this.keyer, out, sampleRate,

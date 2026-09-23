@@ -4,8 +4,10 @@
  * Receives channel-filtered complex baseband chunks from cw_decoder.js, runs the streaming front end
  * (cw_frontend.js) and the ONNX model (models/didahcw.onnx) with onnxruntime-web, and posts decoded text.
  *
- * Inference is stateless and chunked: every INFER_MS we feed frames [emitted - leftContext, latest)
- * and emit only the frames whose full lookahead exists, so every frame is decoded exactly once.
+ * Inference is stateless and fixed-length: every time 50 new frames exist, the model sees
+ * T = leftContext + 50 + lookahead frames and emits only those 50. Each frame is decoded once.
+ * During the first ~4.6 s after a start/reset T is shorter (only real frames, never zero frames),
+ * so the runtime re-plans about ten times; after that the shape is fixed.
  *
  * Messages in : { type:'init', rate, modelUrl, metaUrl, wasmPath }
  *               { type:'audio', i:Float32Array, q:Float32Array, n }   (buffers are returned via 'recycle')
@@ -15,7 +17,8 @@
 
 importScripts('fft.js', 'demodulator.js', 'cw_frontend.js');
 
-const INFER_MS = 250;
+const NEW_FRAMES = 50;     // one decode step; 50 × 10 ms ≈ 500 ms of new audio
+const INFER_POLL_MS = 100;
 
 let ortRt = null;
 let session = null;
@@ -23,17 +26,28 @@ let meta = null;
 let frontend = null;
 let inputName = 'features', outputName = 'log_probs';
 let leftContext = 460, lookahead = 50, bins = 33, numClasses = 44, blank = 43, chars = [];
-let emitted = 0;          // frames already decoded and posted
+let inputT = 0;           // leftContext + NEW_FRAMES + lookahead
+let emitted = 0;          // next frame index to decode
 let prev = null;          // CTC carry
-let inputBuf = null;      // Float32Array reused for the model input
+let inputBuf = null;      // Float32Array of exactly inputT * bins
 let timer = null;
 let busy = false;
+let running = true;
+let curRate = 12000;      // last requested rate, including one that arrived while the model loads
+let inferGen = 0;         // bumped by reset(); an in-flight session.run must not write stale state
 
 function status(state, detail) { postMessage({ type: 'status', state, detail }); }
+
+function setRunning(on) {
+    running = !!on;
+    if (timer) { clearInterval(timer); timer = null; }
+    if (running && session) timer = setInterval(infer, INFER_POLL_MS);
+}
 
 async function init(msg) {
     try {
         status('loading');
+        if (msg.rate) curRate = msg.rate;
         importScripts(msg.ortUrl);
         ortRt = self.ort;
         ortRt.env.wasm.wasmPaths = msg.wasmPath;
@@ -48,11 +62,12 @@ async function init(msg) {
         inputName = meta.onnx_input_name; outputName = meta.onnx_output_name;
         leftContext = meta.left_context_frames; lookahead = meta.lookahead_frames;
         bins = meta.frontend.bins; numClasses = meta.num_classes; blank = meta.blank_index; chars = meta.chars;
-        inputBuf = new Float32Array((leftContext + lookahead + 4096) * bins);
-        frontend = new CWFrontend(msg.rate, 8192);
+        inputT = leftContext + NEW_FRAMES + lookahead;
+        inputBuf = new Float32Array(inputT * bins);
+        frontend = new CWFrontend(curRate, 8192);
+        inferGen++;
         emitted = 0; prev = null;
-        if (timer) clearInterval(timer);
-        timer = setInterval(infer, INFER_MS);
+        setRunning(running);
         status('ready', `${ortRt.env.wasm.numThreads} thread(s)`);
     } catch (e) {
         status('error', String(e && e.message || e));
@@ -60,32 +75,42 @@ async function init(msg) {
 }
 
 function reset() {
+    inferGen++;
     if (frontend) frontend.reset();
     emitted = 0; prev = null;
 }
 
 async function infer() {
-    if (busy || !session || !frontend) return;
+    if (busy || !running || !session || !frontend || !inputBuf) return;
     const F = frontend.frameCount;
-    const lastDecodable = F - lookahead;          // frames [emitted, lastDecodable) have full lookahead
-    if (lastDecodable - emitted < 10) return;     // wait for at least 100 ms of new frames
-    // Frames older than the ring are gone: clamp so we never read overwritten data
+    // Jump forward only when frames were really lost to the ring.
     const oldest = Math.max(0, F - frontend.capacity);
-    if (emitted < oldest + leftContext) emitted = Math.min(lastDecodable, oldest + leftContext);
-    const start = Math.max(0, emitted - leftContext);
-    const T = F - start;
-    if (T * bins > inputBuf.length) inputBuf = new Float32Array(T * bins);
-    const view = inputBuf.subarray(0, T * bins);
-    frontend.copyFrames(start, F, view);
+    if (emitted < oldest) {
+        emitted = oldest;
+        prev = null;
+    }
+    // Need 50 new frames whose lookahead is already in the ring.
+    if (F - lookahead - emitted < NEW_FRAMES) return;
+    // After a start/reset the left context is shorter than leftContext. Feed only the frames
+    // that exist so the model's own causal padding sees what training saw; zero input frames
+    // are not equivalent (v6 CER 14.0 % -> 19.7 %). The shape varies only during warm-up.
+    const end = emitted + NEW_FRAMES + lookahead;
+    const start = Math.max(emitted - leftContext, oldest);
+    const T = end - start;
+    const ctx = emitted - start;
+    frontend.copyFrames(start, end, inputBuf);
+    const gen = inferGen;
     busy = true;
     try {
-        const tensor = new ortRt.Tensor('float32', view, [1, T, bins]);
+        const data = T === inputT ? inputBuf : inputBuf.subarray(0, T * bins);
+        const tensor = new ortRt.Tensor('float32', data, [1, T, bins]);
         const out = await session.run({ [inputName]: tensor });
+        if (gen !== inferGen) return;
         const lp = out[outputName].data;
-        const from = emitted - start, to = lastDecodable - start;
-        const r = ctcGreedy(lp.subarray(from * numClasses, to * numClasses), to - from, numClasses, chars, blank, prev);
+        const from = ctx * numClasses;
+        const r = ctcGreedy(lp.subarray(from, from + NEW_FRAMES * numClasses), NEW_FRAMES, numClasses, chars, blank, prev);
         prev = r.prev;
-        emitted = lastDecodable;
+        emitted += NEW_FRAMES;
         if (r.text) postMessage({ type: 'text', text: r.text });
     } catch (e) {
         status('error', String(e && e.message || e));
@@ -101,11 +126,13 @@ onmessage = (ev) => {
         case 'init': init(m); break;
         case 'audio':
             if (frontend) frontend.process(m.i, m.q, m.n);
-            postMessage({ type: 'recycle', i: m.i, q: m.q }, [m.i.buffer, m.q.buffer]);
+            postMessage({ type: 'recycle', i: m.i, q: m.q, epoch: m.epoch }, [m.i.buffer, m.q.buffer]);
             break;
         case 'rate':
-            if (frontend) { frontend.setInputRate(m.rate); reset(); }
+            curRate = m.rate;
+            if (frontend) { frontend.setInputRate(curRate); reset(); }
             break;
         case 'reset': reset(); break;
+        case 'run': setRunning(m.on); break;
     }
 };

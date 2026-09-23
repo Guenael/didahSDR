@@ -12,12 +12,13 @@ class SDRValueDial {
     constructor(container, options = {}) {
         this.container = typeof container === 'string' ? document.getElementById(container) : container;
         this.numDigits = options.numDigits || 9; // up to 999.999.999 Hz (999 MHz)
-        this.value = options.value || 14048700;
+        this.value = options.value || 14050800;
         this.min = options.min || 0;
         this.max = options.max || 999999999;
         this.unit = options.unit || 'Hz';
         this.activeCursorIndex = -1; // -1 means none selected
         this.onChange = options.onChange || null;
+        this.locked = false;
 
         this.drumElements = [];
         this.buildDOM();
@@ -121,6 +122,7 @@ class SDRValueDial {
     }
 
     stepDigit(digitIndex, direction) {
+        if (this.locked) return;
         const drum = this.drumElements[digitIndex];
         if (!drum) return;
 
@@ -130,6 +132,7 @@ class SDRValueDial {
     }
 
     zeroDigitsRight(digitIndex) {
+        if (this.locked) return;
         const drum = this.drumElements[digitIndex];
         if (!drum) return;
 
@@ -183,6 +186,11 @@ class SDRValueDial {
             }
 
             const cur = this.activeCursorIndex;
+
+            if (this.locked && (e.key === 'ArrowUp' || e.key === 'ArrowDown' || (e.key >= '0' && e.key <= '9'))) {
+                e.preventDefault();
+                return;
+            }
 
             if (e.key === 'ArrowUp') {
                 e.preventDefault();

@@ -54,6 +54,28 @@ if (fs.existsSync(FIXTURE)) {
     });
 }
 
+test('copyFrames crosses the ring in contiguous runs', () => {
+    const fe = new CWFrontend(800, 4);
+    const n = 64 + 8 * 5;
+    const i = new Float32Array(n);
+    const q = new Float32Array(n);
+    for (let k = 0; k < n; k++) {
+        i[k] = Math.sin(k * 0.17);
+        q[k] = Math.cos(k * 0.17);
+    }
+    fe.process(i, q, n);
+    assert.equal(fe.frameCount, 6);
+    const got = new Float32Array(4 * fe.bins);
+    fe.copyFrames(2, 6, got);
+    const cap = fe.capacity;
+    for (let k = 2; k < 6; k++) {
+        const s = (k % cap) * fe.bins;
+        for (let b = 0; b < fe.bins; b++) {
+            assert.equal(got[(k - 2) * fe.bins + b], fe.frames[s + b]);
+        }
+    }
+});
+
 test('rejects a rate that is not a multiple of 800', () => {
     assert.throws(() => new CWFrontend(44100));
 });

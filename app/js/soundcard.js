@@ -39,23 +39,25 @@ function pickSoundRate(min, max, native) {
     return 0;
 }
 
-function clampInt16(x) {
-    if (x > 32767) return 32767;
-    if (x < -32768) return -32768;
-    return x;
-}
-
-/** Pack stereo Float32 channels into interleaved Int16 I/Q. */
-function packStereoIq(left, right, swap, dst) {
-    const n = left.length;
+/**
+ * Pack stereo Float32 channels into interleaved Float32 I/Q (±1).
+ * `dstOff` is the complex-sample index in `dst`. `count` frames are read
+ * from `srcOff` (default: the whole of `left`). A missing right channel is silence.
+ * The capture worklet calls this; do not keep a second copy of the mapping.
+ */
+function packStereoIq(left, right, swap, dst, dstOff, count, srcOff) {
+    const n = count == null ? left.length : count;
+    const s0 = srcOff || 0;
+    const base = (dstOff || 0) * 2;
     const qSrc = right && right.length ? right : null;
     for (let i = 0; i < n; i++) {
-        const iSamp = swap ? (qSrc ? qSrc[i] : 0) : left[i];
-        const qSamp = swap ? left[i] : (qSrc ? qSrc[i] : 0);
-        dst[i * 2] = clampInt16(iSamp * 32767);
-        dst[i * 2 + 1] = clampInt16(qSamp * 32767);
+        const s = s0 + i;
+        const iSamp = swap ? (qSrc ? qSrc[s] : 0) : left[s];
+        const qSamp = swap ? left[s] : (qSrc ? qSrc[s] : 0);
+        dst[base + i * 2] = iSamp;
+        dst[base + i * 2 + 1] = qSamp;
     }
-    return dst;
+    return n;
 }
 
 /**
@@ -109,7 +111,8 @@ class SoundcardSource {
         this.sourceNode = null;
         this.mute = null;
         this._starting = false;
-        this._watchingDevices = false;
+        this._gen = 0;
+        this._feedGen = 0;
     }
 
     setSwap(on) {
@@ -136,41 +139,16 @@ class SoundcardSource {
             return false;
         }
         stream.getTracks().forEach((t) => t.stop());
-        this._status('Listing sound-card devices (trying 96 / 48 / 192 kHz)…', false);
+        this._status('Listing sound-card inputs…', false);
         await this.refreshDevices();
-        if (!this._watchingDevices && navigator.mediaDevices.addEventListener) {
-            this._watchingDevices = true;
-            navigator.mediaDevices.addEventListener('devicechange', () => {
-                this.refreshDevices();
-            });
-        }
+        onAudioDevicesChanged(() => { this.refreshDevices(); });
         return true;
     }
 
     async refreshDevices() {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
-            this.devices = [];
-            if (this.onDevices) this.onDevices(this.devices);
-            return this.devices;
-        }
-        const all = await navigator.mediaDevices.enumerateDevices();
-        const inputs = all.filter((d) => d.kind === 'audioinput');
-        const listed = [];
-        for (let i = 0; i < inputs.length; i++) {
-            const d = inputs[i];
-            const probed = await this._probeDevice(d.deviceId);
-            listed.push({
-                id: d.deviceId,
-                label: d.label || `Audio input ${i + 1}`,
-                ok: probed.ok,
-                rate: probed.rate,
-                channels: probed.channels,
-                native: probed.native
-            });
-        }
-        this.devices = listed;
-        if (this.onDevices) this.onDevices(listed);
-        return listed;
+        this.devices = await listAudioInputs();
+        if (this.onDevices) this.onDevices(this.devices);
+        return this.devices;
     }
 
     _gum(deviceId, extra) {
@@ -191,96 +169,13 @@ class SoundcardSource {
         };
     }
 
-    async _tryContextRate(want) {
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        if (!AudioCtx) return 0;
-        let ctx;
-        try {
-            ctx = new AudioCtx({ sampleRate: want });
-        } catch (e) {
-            try { ctx = new AudioCtx(); } catch (e2) { return 0; }
-        }
-        const sr = Math.round(ctx.sampleRate);
-        try { await ctx.close(); } catch (e) { /* ignore */ }
-        return isSoundRate(sr) ? sr : 0;
-    }
-
-    /**
-     * Ask for 96, then 48, then 192 kHz. Chrome on Linux often ignores the constraint and
-     * reports 44.1 kHz; in that case we still accept the device if an AudioContext can run
-     * at an allowed rate (the context resamples).
-     */
-    async _probeDevice(deviceId) {
-        if (!deviceId) return { ok: false, rate: 0, channels: 1, native: 0, rates: [] };
-        const working = [];
-        let channels = 1;
-        let native = 0;
-
-        for (let i = 0; i < PREFERRED_RATES.length; i++) {
-            const rate = PREFERRED_RATES[i];
-            let stream;
-            try {
-                stream = await this._gum(deviceId, { sampleRate: { exact: rate } });
-            } catch (e) {
-                continue;
-            }
-            try {
-                const info = this._readTrack(stream);
-                channels = Math.max(channels, info.channels);
-                if (!native) native = info.sampleRate;
-                const got = info.sampleRate || rate;
-                if (isSoundRate(got)) working.push(got);
-            } finally {
-                stream.getTracks().forEach((t) => t.stop());
-            }
-            if (working.length) break;
-        }
-
-        if (!working.length) {
-            let stream;
-            try {
-                stream = await this._gum(deviceId, { sampleRate: { ideal: 96000 } });
-            } catch (e) {
-                try {
-                    stream = await this._gum(deviceId, {});
-                } catch (e2) {
-                    return { ok: false, rate: 0, channels, native, rates: [] };
-                }
-            }
-            try {
-                const info = this._readTrack(stream);
-                channels = Math.max(channels, info.channels);
-                native = info.sampleRate || native;
-                const track = stream.getAudioTracks()[0];
-                const classified = track ? trackCaptureInfo(track) : { ok: false, rate: 0, channels };
-                channels = Math.max(channels, classified.channels);
-                if (classified.ok && classified.rate) working.push(classified.rate);
-            } finally {
-                stream.getTracks().forEach((t) => t.stop());
-            }
-        }
-
-        if (!working.length) {
-            for (let i = 0; i < PREFERRED_RATES.length; i++) {
-                const sr = await this._tryContextRate(PREFERRED_RATES[i]);
-                if (sr) {
-                    working.push(sr);
-                    break;
-                }
-            }
-        }
-
-        const rate = preferredCaptureRate(working);
-        // Chrome/Linux often reports channelCount 1 on stereo Pulse devices; still allow IQ.
-        const stereoOk = channels >= 2 || (rate > 0 && native > 0);
-        return { ok: stereoOk && rate > 0, rate, channels: Math.max(channels, stereoOk ? 2 : 1), native, rates: working };
-    }
-
     async start(deviceId) {
         if (this._starting) return;
         this._starting = true;
+        const gen = ++this._gen;
         try {
-            await this.stop();
+            await this._shutdown();
+            if (gen !== this._gen) return;
             if (!deviceId) {
                 this._status('Select a sound-card device.', false);
                 return;
@@ -298,6 +193,7 @@ class SoundcardSource {
             } catch (e) {
                 stream = await this._gum(deviceId, {});
             }
+            this.stream = stream;
             const track = stream.getAudioTracks()[0];
             if (track && track.applyConstraints) {
                 try {
@@ -320,41 +216,53 @@ class SoundcardSource {
             } catch (e) {
                 ctx = new AudioCtx();
             }
+            this.ctx = ctx;
             if (!isSoundRate(ctx.sampleRate)) {
-                try { await ctx.close(); } catch (e) { /* ignore */ }
+                await this._abandon(null, ctx);
                 try { ctx = new AudioCtx({ sampleRate: 48000 }); } catch (e2) { ctx = new AudioCtx(); }
+                this.ctx = ctx;
             }
             if (!isSoundRate(ctx.sampleRate)) {
                 const got = ctx.sampleRate;
-                stream.getTracks().forEach((t) => t.stop());
-                try { await ctx.close(); } catch (e) { /* ignore */ }
+                await this._abandon(stream, ctx);
                 this._status('AudioContext is ' + got + ' Hz; need 48, 96 or 192 kHz.', false);
                 return;
             }
             await ctx.resume();
             if (!ctx.audioWorklet) {
-                stream.getTracks().forEach((t) => t.stop());
-                ctx.close();
+                await this._abandon(stream, ctx);
                 this._status('Sound card capture needs AudioWorklet.', false);
                 return;
             }
 
-            await ctx.audioWorklet.addModule('js/soundcard_capture_worklet.js');
+            if (gen !== this._gen) {
+                await this._abandon(stream, ctx);
+                return;
+            }
+            const trackInfo = this._readTrack(stream);
+            await ctx.audioWorklet.addModule('js/soundcard.js');
+            await ctx.audioWorklet.addModule('js/audio_capture_worklet.js');
+            if (gen !== this._gen) {
+                await this._abandon(stream, ctx);
+                return;
+            }
             const sourceNode = ctx.createMediaStreamSource(stream);
             sourceNode.channelCount = 2;
             sourceNode.channelCountMode = 'explicit';
             sourceNode.channelInterpretation = 'speakers';
-            const node = new AudioWorkletNode(ctx, 'soundcard-capture', {
+            const node = new AudioWorkletNode(ctx, 'audio-capture', {
                 numberOfInputs: 1,
                 numberOfOutputs: 1,
                 outputChannelCount: [1],
                 channelCount: 2,
-                channelCountMode: 'explicit'
+                channelCountMode: 'explicit',
+                processorOptions: { mode: 'stereo-iq', swap: this.swap }
             });
             node.port.onmessage = (e) => {
                 const m = e.data;
                 if (!m || m.type !== 'iq' || !m.samples) return;
-                if (this.onRawIQ) this.onRawIQ(m.samples);
+                if (gen !== this._gen) return;
+                if (this.onRawIQ) this.onRawIQ(m.samples, m.n || (m.samples.length >> 1));
                 node.port.postMessage({ type: 'recycle', samples: m.samples }, [m.samples.buffer]);
             };
             node.port.postMessage({ type: 'swap', on: this.swap });
@@ -372,12 +280,16 @@ class SoundcardSource {
             this.mute = mute;
             this.deviceId = deviceId;
             this.sampleRate = ctx.sampleRate;
+            this._feedGen = gen;
             this.connected = true;
             const openedId = settings.deviceId || '';
             const chromeHint = (openedId && openedId !== deviceId)
                 ? ' Chrome may be using another mic — in pavucontrol → Recording, route this tab to didahSDR_IQ.'
                 : '';
-            this._status('Sound card IQ · ' + (this.sampleRate / 1000) + ' kHz.' + chromeHint, true);
+            const monoWarn = trackInfo.channels < 2
+                ? ' Mono input: I/Q wants stereo (left = I, right = Q).'
+                : '';
+            this._status('Sound card IQ · ' + (this.sampleRate / 1000) + ' kHz.' + monoWarn + chromeHint, true);
             if (this.onReady) this.onReady({ sampleRate: this.sampleRate, centerFreq: 0, deviceId });
         } catch (e) {
             this._status((e && e.message) ? e.message : 'Sound card open failed.', false);
@@ -388,7 +300,24 @@ class SoundcardSource {
     }
 
     async stop() {
+        this._gen++;
         this.connected = false;
+        await this._shutdown();
+    }
+
+    /** Stop a capture that this start() still owns. A newer start keeps its own stream. */
+    async _abandon(stream, ctx) {
+        if (stream) {
+            if (this.stream === stream) this.stream = null;
+            stream.getTracks().forEach((t) => t.stop());
+        }
+        if (ctx) {
+            if (this.ctx === ctx) this.ctx = null;
+            try { await ctx.close(); } catch (e) { /* already closed */ }
+        }
+    }
+
+    async _shutdown() {
         if (this.node) {
             try { this.node.disconnect(); } catch (e) { /* already gone */ }
             this.node = null;
@@ -413,9 +342,11 @@ class SoundcardSource {
     }
 }
 
+if (typeof globalThis !== 'undefined') globalThis.packStereoIq = packStereoIq;
+
 if (typeof module !== 'undefined') {
     module.exports = {
         SoundcardSource, SOUND_RATES, PREFERRED_RATES, isSoundRate, pickSoundRate,
-        preferredCaptureRate, packStereoIq, classifyCapture, clampInt16
+        preferredCaptureRate, packStereoIq, classifyCapture
     };
 }

@@ -1,9 +1,11 @@
 /**
- * didahSDR - SNR S-Meter Component
- * 
- * Reports the difference between the tuned signal and the local RF noise floor
- * on a dedicated 0 to 40+ dB scale (0 ... 10 ... 20 ... 30 ... 40+ dB).
- * 
+ * didahSDR - SNR-Meter Component
+ *
+ * (S+N)/N in the tuned passband: mean linear power inside the channel versus mean
+ * linear power in neighbouring bins. Locally white noise reads ~0 dB; a signal
+ * in the passband reads how far that channel sits above the local floor.
+ * Scale is 0 ... 10 ... 20 ... 30 ... 40+ dB.
+ *
  * Features:
  * - Floating, draggable window (chrome shared with W-Config via floating_window.js)
  * - Fast attack (~20ms) and natural decay (~150ms) ballistics for CW Morse bursts
@@ -11,6 +13,9 @@
  * - Precision vector SVG scale perfectly aligned with the LED gradient bargraph
  * - Instantaneous numerical readout, peak readout, and mode/bandwidth badge
  */
+
+/** Exponential power (complex Gaussian) has median = ln(2) × mean, 1.59 dB below the mean. */
+const SNR_MEDIAN_BIAS_DB = 10 * Math.log10(1 / Math.LN2);
 
 class DidahSMeter {
     constructor() {
@@ -27,12 +32,8 @@ class DidahSMeter {
         this.currentSnr = 0.0;
         this.peakSnr = 0.0;
         this.peakHoldUntil = 0;
-        this.lastUpdateTime = 0;
         this.lastRenderTime = 0;
-
-        // Preallocated scratch array for local noise percentile calculation (zero GC allocations)
         this.noiseScratch = new Float32Array(256);
-
     }
 
     init() {
@@ -104,15 +105,15 @@ class DidahSMeter {
     }
 
     /**
-     * Compute instantaneous SNR in dB above local noise floor and update meter.
+     * (S+N)/N in dB from linear mag². Noise is the median of bins outside a guard
+     * of ceil(ENBW)+2, lifted by the exponential-median bias so Gaussian noise reads 0 dB.
      */
-    updateFromSpectrum(specDb, sampleRate, centerFreq, tunedFreq, modulation, bandwidth) {
-        if (!this.visible || !this.container) return;
-
-        const nfft = specDb.length;
+    computeSnrDb(mag2, sampleRate, centerFreq, tunedFreq, modulation, bandwidth, enbw) {
+        const nfft = mag2.length;
         const binWidth = sampleRate / nfft;
         const offsetHz = tunedFreq - centerFreq;
         const k0 = Math.round((offsetHz / sampleRate) * nfft + nfft / 2);
+        const guard = Math.ceil(enbw == null ? 2 : enbw) + 2;
 
         let kStart, kEnd;
         const mod = (modulation || 'cw').toLowerCase();
@@ -122,7 +123,6 @@ class DidahSMeter {
             kStart = Math.max(0, k0 - halfBins);
             kEnd = Math.min(nfft - 1, k0 + halfBins);
         } else if (MODES[mod] && MODES[mod].low !== null) {
-            // SSB: same passband as the demodulator channel filter
             const m = MODES[mod];
             kStart = Math.max(0, k0 + Math.round(m.low / binWidth));
             kEnd = Math.min(nfft - 1, k0 + Math.round(m.high / binWidth));
@@ -132,52 +132,53 @@ class DidahSMeter {
             kEnd = Math.min(nfft - 1, k0 + halfBins);
         }
 
-        if (kEnd <= kStart) return;
+        if (kEnd <= kStart) return null;
 
-        // 1. Peak power in passband
-        let maxPassbandDb = -999.0;
+        let passSum = 0.0;
+        let passCount = 0;
         for (let k = kStart; k <= kEnd; k++) {
-            if (specDb[k] > maxPassbandDb) {
-                maxPassbandDb = specDb[k];
-            }
+            passSum += mag2[k];
+            passCount++;
         }
 
-        // 2. Measure local background noise floor from surrounding spectrum bins (+/- 1.5 kHz)
         const noiseSpan = Math.max(16, Math.round(1500 / binWidth));
+        const leftEnd = kStart - guard;
+        const leftStart = Math.max(0, leftEnd - noiseSpan);
+        const rightStart = kEnd + guard;
+        const rightEnd = Math.min(nfft - 1, rightStart + noiseSpan);
         let noiseCount = 0;
+        if (this.noiseScratch.length < nfft) this.noiseScratch = new Float32Array(nfft);
+        const scratch = this.noiseScratch;
+        for (let k = leftStart; k < leftEnd; k++) scratch[noiseCount++] = mag2[k];
+        for (let k = rightStart + 1; k <= rightEnd; k++) scratch[noiseCount++] = mag2[k];
 
-        // Left noise window
-        const leftStart = Math.max(0, kStart - noiseSpan);
-        for (let k = leftStart; k < kStart; k++) {
-            this.noiseScratch[noiseCount++] = specDb[k];
-        }
-        // Right noise window
-        const rightEnd = Math.min(nfft - 1, kEnd + noiseSpan);
-        for (let k = kEnd + 1; k <= rightEnd; k++) {
-            this.noiseScratch[noiseCount++] = specDb[k];
-        }
+        if (passCount < 1 || noiseCount < 8 || !(passSum > 0)) return null;
+        scratch.subarray(0, noiseCount).sort();
+        const mid = (noiseCount - 1) >> 1;
+        const median = noiseCount % 2 === 1
+            ? scratch[mid]
+            : 0.5 * (scratch[mid] + scratch[mid + 1]);
+        if (!(median > 0)) return null;
+        return 10 * Math.log10((passSum / passCount) / median) - SNR_MEDIAN_BIAS_DB;
+    }
 
-        let localNoiseFloorDb = -115.0;
-        if (noiseCount >= 8) {
-            const valid = this.noiseScratch.subarray(0, noiseCount);
-            valid.sort();
-            // 25th percentile represents clean noise floor even in presence of adjacent signals
-            localNoiseFloorDb = valid[Math.floor(noiseCount * 0.25)];
-        }
-
-        // Difference between tuned signal and noise floor
-        const rawDiffDb = maxPassbandDb - localNoiseFloorDb;
-        // Apply slight deadband (~2.0 dB) to account for natural Rayleigh variance in pure noise
-        const rawSnrDb = Math.max(0.0, rawDiffDb - 2.0);
-
-        this.applyBallistics(rawSnrDb);
+    /**
+     * Compute instantaneous SNR and update the meter ballistics / DOM.
+     * `mag2` is the linear fftshifted power buffer.
+     */
+    updateFromSpectrum(mag2, sampleRate, centerFreq, tunedFreq, modulation, bandwidth, enbw, hopSamples) {
+        if (!this.visible || !this.container) return;
+        const rawSnrDb = this.computeSnrDb(mag2, sampleRate, centerFreq, tunedFreq, modulation, bandwidth, enbw);
+        if (rawSnrDb == null || !Number.isFinite(rawSnrDb)) return;
+        const hop = hopSamples > 0 ? hopSamples : 0;
+        const dt = hop > 0 && sampleRate > 0 ? hop / sampleRate : 0.02;
+        this.applyBallistics(rawSnrDb, dt);
         this.render();
     }
 
-    applyBallistics(rawSnrDb) {
+    applyBallistics(rawSnrDb, dtSec) {
+        const dt = Math.min(0.1, Math.max(0.001, dtSec || 0.02));
         const now = performance.now();
-        const dt = this.lastUpdateTime ? Math.min(0.1, Math.max(0.005, (now - this.lastUpdateTime) * 0.001)) : 0.02;
-        this.lastUpdateTime = now;
 
         // Asymmetric attack/decay:
         // - Fast attack (~20ms) captures short Morse dits and sharp transient syllables

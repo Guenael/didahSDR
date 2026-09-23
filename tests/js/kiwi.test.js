@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { req } = require('./load.js');
 const { unpackKiwiSndIq, parseKiwiMsg, kiwiSndUrl, normalizeKiwiUrl, kiwiHostForUrl,
         KiwiConnection, KIWI_EXAMPLE_URL, KIWI_DEFAULT_PORT } = req('kiwi.js');
-const { findSource, SOURCES } = req('sources.js');
+const { findSource, SOURCES, kiwiEntryFrequency, KIWI_CW_HZ } = req('sources.js');
 
 function buildSndFrame({ i = 1000, q = -2000, n = 4, flags = 0x08, seq = 7, smeter = 800 }) {
     const gps = 10;
@@ -24,19 +24,31 @@ function buildSndFrame({ i = 1000, q = -2000, n = 4, flags = 0x08, seq = 7, smet
     return buf;
 }
 
-test('catalog default is VA2GKA replay; kiwi live defaults to OH5AE at 7.1 MHz', () => {
+test('catalog default is VA2GKA replay; kiwi live defaults to OH5AE on 40 m CW', () => {
     assert.equal(SOURCES[0].id, 'va2gka');
     assert.equal(SOURCES[0].protocol, 'didah');
-    const live = findSource('f4kiy');
+    const live = findSource('oh5ae');
     assert.equal(live.protocol, 'kiwi');
     assert.equal(live.host, 'oh5ae.dyndns.org');
     assert.equal(live.port, 8073);
     assert.equal(live.secure, false);
-    assert.equal(live.startFreq, 7100000);
+    assert.equal(live.startFreq, 7018000);
+    assert.equal(live.startFreq, KIWI_CW_HZ);
     assert.equal(live.startMod, 'cw');
     assert.equal(findSource('missing').id, 'va2gka');
     assert.equal(findSource('soundcard').protocol, 'soundcard');
     assert.equal(findSource('soundcard').startFreq, 0);
+});
+
+test('kiwi entry keeps the previous HF dial and otherwise opens on 40 m CW', () => {
+    assert.equal(kiwiEntryFrequency({ protocol: 'didah', tunedFreq: 14050800, fromUser: true }), 14050800);
+    assert.equal(kiwiEntryFrequency({ protocol: 'rtlsdr', tunedFreq: 14048000, fromUser: true }), 14048000);
+    assert.equal(kiwiEntryFrequency({ protocol: 'ic7300', tunedFreq: -650, radioHz: 7025000, fromUser: true }), 7025000);
+    assert.equal(kiwiEntryFrequency({ protocol: 'soundcard', tunedFreq: 700, fromUser: true }), KIWI_CW_HZ);
+    assert.equal(kiwiEntryFrequency({ protocol: 'ic7300', tunedFreq: -650, radioHz: 0, fromUser: true }), KIWI_CW_HZ);
+    assert.equal(kiwiEntryFrequency({ protocol: 'rtlsdr', tunedFreq: 145000000, fromUser: true }), KIWI_CW_HZ);
+    assert.equal(kiwiEntryFrequency({ protocol: 'didah', tunedFreq: 14050800, fromUser: false }), KIWI_CW_HZ);
+    assert.equal(kiwiEntryFrequency(null), KIWI_CW_HZ);
 });
 
 test('normalizeKiwiUrl strips http(s), path, and whitespace then splits host/port', () => {
@@ -124,6 +136,12 @@ test('unpackKiwiSndIq byte-swaps BE stereo IQ after the GPS header', () => {
     assert.equal(b.iq, a.iq, 'destination buffer is reused when the size matches');
 });
 
+test('KiwiConnection defaults to the 40 m CW segment', () => {
+    const k = new KiwiConnection({});
+    assert.equal(k.startFreqHz, 7018000);
+    assert.equal(k.ddcHz, 7018000);
+});
+
 test('KiwiConnection sends AR OK then IQ setup only after both handshake messages', () => {
     const sent = [];
     const k = new KiwiConnection({ startFreqHz: 7100000 });
@@ -139,4 +157,30 @@ test('KiwiConnection sends AR OK then IQ setup only after both handshake message
     assert.equal(k.sampleRate, 11998.8);
     assert.ok(sent.some((s) => s.startsWith('SET AR OK in=12000')));
     assert.ok(sent.some((s) => s.includes('SET mod=iq') && s.includes('freq=7100.000')));
+    assert.ok(sent.includes('SET agc=0 hang=0 thresh=-90 slope=6 decay=1000 manGain=50'));
+    assert.equal(sent.some((s) => s === 'SET agc=0 manGain=50'), false);
+});
+
+test('a terminal Kiwi status stops the reconnect loop', () => {
+    const k = new KiwiConnection({});
+    k._wantConnect = true;
+    let closed = 0;
+    k.ws = { readyState: 1, send() {}, close() { closed++; }, onclose: () => {} };
+    k._handleMsg({ badp: '1' });
+    assert.equal(k._wantConnect, false);
+    assert.equal(closed, 1);
+    k._wantConnect = true;
+    k.ws = { readyState: 1, send() {}, close() {}, onclose: () => {} };
+    k._handleMsg({ too_busy: '1' });
+    assert.equal(k._wantConnect, false);
+    k._wantConnect = true;
+    k.ws = null;
+    k._handleMsg({ down: null });
+    assert.equal(k._wantConnect, false);
+    k._wantConnect = true;
+    k._handleMsg({ inactivity_timeout: '1' });
+    assert.equal(k._wantConnect, false);
+    k._wantConnect = true;
+    k._handleMsg({ sample_rate: '12000' });
+    assert.equal(k._wantConnect, true);
 });

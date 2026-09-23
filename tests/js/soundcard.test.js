@@ -1,4 +1,7 @@
 'use strict';
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { req } = require('./load.js');
@@ -48,14 +51,49 @@ test('classifyCapture requires stereo and an allowed rate', () => {
     assert.equal(ranged.rate, 96000);
 });
 
-test('packStereoIq maps L/R to I/Q and honours swap', () => {
+test('packStereoIq maps L/R to float I/Q and honours swap', () => {
     const left = new Float32Array([1, 0.5]);
     const right = new Float32Array([-1, 0]);
-    const dst = new Int16Array(4);
+    const dst = new Float32Array(4);
     packStereoIq(left, right, false, dst);
-    assert.equal(dst[0], 32767);
-    assert.equal(dst[1], -32767);
+    assert.equal(dst[0], 1);
+    assert.equal(dst[1], -1);
     packStereoIq(left, right, true, dst);
-    assert.equal(dst[0], -32767);
-    assert.equal(dst[1], 32767);
+    assert.equal(dst[0], -1);
+    assert.equal(dst[1], 1);
+    const partial = new Float32Array(8);
+    packStereoIq(left, right, false, partial, 1, 1, 1);
+    assert.equal(partial[2], 0.5);
+    assert.equal(partial[3], 0);
+    packStereoIq(left, null, false, partial, 0, 1, 0);
+    assert.equal(partial[0], 1);
+    assert.equal(partial[1], 0);
+});
+
+test('capture worklet packs a quantum through packStereoIq', () => {
+    global.sampleRate = 48000;
+    global.AudioWorkletProcessor = class AudioWorkletProcessor {
+        constructor() {
+            this.port = { onmessage: null, postMessage() {} };
+        }
+    };
+    let Proc = null;
+    global.registerProcessor = (_name, cls) => { Proc = cls; };
+    const src = fs.readFileSync(path.resolve(__dirname, '../../app/js/audio_capture_worklet.js'), 'utf8');
+    vm.runInThisContext(src);
+    const proc = new Proc({ processorOptions: { mode: 'stereo-iq' } });
+    const left = new Float32Array(128);
+    const right = new Float32Array(128);
+    left[3] = 0.25;
+    right[3] = -0.5;
+    proc.process([[left, right]], [[new Float32Array(128)]]);
+    const expect = new Float32Array(256);
+    packStereoIq(left, right, false, expect);
+    for (let i = 0; i < 256; i++) assert.equal(proc.cur[i], expect[i]);
+    proc.port.onmessage({ data: { type: 'swap', on: true } });
+    proc.fill = 0;
+    proc.process([[left, right]], [[new Float32Array(128)]]);
+    packStereoIq(left, right, true, expect);
+    assert.equal(proc.cur[6], right[3]);
+    assert.equal(proc.cur[7], left[3]);
 });

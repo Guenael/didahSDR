@@ -10,6 +10,10 @@ const fs = require('fs');
 const JS = path.resolve(__dirname, '../../app/js');
 const req = (name) => require(path.join(JS, name));
 
+const wsRe = req('ws_reconnect.js');
+global.clearReconnectTimer = wsRe.clearReconnectTimer;
+global.armReconnect = wsRe.armReconnect;
+
 const { MODES, WATERFALL_DB_FLOOR, setSsbPassband } = req('modes.js');
 global.MODES = MODES;
 global.WATERFALL_DB_FLOOR = WATERFALL_DB_FLOOR;
@@ -17,7 +21,12 @@ global.setSsbPassband = setSsbPassband;
 global.Colormaps = req('colormaps.js');
 global.CWAdaptiveFilter = req('cw_filter.js');
 global.DidahFFT = req('fft.js');
+global.DidahSMeter = req('smeter.js');
 global.AGC = req('agc.js');
+const fx = req('audio_fx.js');
+global.DidahAutoNotch = fx.DidahAutoNotch;
+global.DidahNoiseReduction = fx.DidahNoiseReduction;
+global.DidahSquelch = fx.DidahSquelch;
 const demod = req('demodulator.js');
 global.DidahDemodulator = demod.DidahDemodulator;
 global.designLowpass = demod.designLowpass;
@@ -67,6 +76,14 @@ function iqTone(freqHz, rate, numSamples, amp = 0.5, phase0 = 0) {
     return out;
 }
 
+/** Int16 interleaved IQ → Float32 ±1, the pipeline input contract. */
+function floatIq(int16) {
+    const out = new Float32Array(int16.length);
+    const s = 1 / 32768;
+    for (let i = 0; i < int16.length; i++) out[i] = int16[i] * s;
+    return out;
+}
+
 /** Peak-bin frequency and level (dB) of a real audio block via the project FFT. */
 function audioPeak(samples, rate, fftSize = 8192) {
     const fft = new DidahFFT(fftSize);
@@ -80,4 +97,4 @@ function audioPeak(samples, rate, fftSize = 8192) {
 
 const peakAbs = (a) => { let p = 0; for (let i = 0; i < a.length; i++) { const v = Math.abs(a[i]); if (v > p) p = v; } return p; };
 
-module.exports = { req, loadSampleWav, iqTone, audioPeak, peakAbs, SAMPLE_WAV };
+module.exports = { req, loadSampleWav, iqTone, floatIq, audioPeak, peakAbs, SAMPLE_WAV };

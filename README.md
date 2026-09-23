@@ -51,7 +51,7 @@ The interface provides an interactive toolbar and controls:
 | CW Filter           | Toggle     | Enables adaptive IIR noise-floor estimation and spatial sharpening |
 | CW Bandwidth Slider | Range      | Custom passband width adjustment (50 Hz to 350 Hz) |
 | Waterfall Sliders   | Range      | Adjustable Minimum Level (-100 to 0 dB) and Dynamic Range (10 to 120 dB) |
-| AGC                 | DSP Engine | Optimal two-sided AGC maintaining dynamic range between Morse dots and dashes |
+| AGC                 | DSP Engine | Two-sided AGC (`AGC`) keeping Morse dots and dashes in range |
 
 ## Features of the application
 
@@ -69,28 +69,40 @@ The interface provides an interactive toolbar and controls:
 
 ## Architecture
 
+The Python server does no DSP. It loops a 16-bit stereo IQ WAV and pushes raw `0x03` packets over
+WebSocket. The browser demodulates, draws the waterfall, and decodes CW.
+
+Five sources share one float contract, `onRawIQ(Float32 interleaved ±1, n)`, and one lifecycle
+(`start` / `stop` / `connected`, plus `onCenterApplied` when the radio moves the centre):
+
+| Source | What it is |
+| --- | --- |
+| VA2GKA Replay | This server, local WebSocket |
+| KiwiSDR | Direct SND connection, IQ mode, about 12 kHz |
+| Sound card | Stereo I/Q at 48 / 96 / 192 kHz, centre 0 Hz |
+| IC-7300 | Real 12 kHz USB IF, mixed to complex baseband, CI-V for the VFO |
+| RTL-SDR | WebUSB, decimated to 192 kHz |
+
+Demodulation runs at one channel rate near 12 kHz (`CH_RATE` in `demodulator.js`): a phasor NCO,
+halfband decimation, then a Kaiser channel filter whose width does not depend on the source rate.
+The AGC class is `AGC` (`app/js/agc.js`). USB and LSB passbands are adjustable (`setSsbPassband` in
+`modes.js`, default 200–2700 Hz). The CW decoder worker runs a stateless fixed-length ONNX call, not
+a streaming model; the sample front end in front of that call is still incremental.
+
 ```
-Browser (Vanilla JS + HTML5 Canvas + Web Audio)
+Browser (vanilla JS, WebGL waterfall, Web Audio)
 │
-├── DidahConnection (WebSocket client: /ws)
-│     ├── Receives raw IQ Float32 / Int16 frames
-│     └── Sends tuning, mode, and bandwidth updates
-│
-├── DidahFFT Engine (Client-side FFT, Hanning window, dB scaling)
-├── CW Filter (Adaptive IIR noise estimation + 1D spatial convolution)
-├── Horizontal Waterfall Canvas (Right-to-left scrolling, custom colormaps)
-├── DidahDemodulator (CW BFO, USB/LSB Weaver/Hilbert phase-shift, IIR filters)
-└── AGC & Web Audio Player (Two-sided envelope AGC, low-latency AudioContext)
+├── IQ sources → onRawIQ(Float32 ±1)   (only the selected source)
+├── DidahDemodulator at CH_RATE ≈ 12 kHz → AGC → AudioWorklet
+├── FFT + optional CW filter → horizontal waterfall
+└── CW decoder worker (stateless ONNX)
                                ▲
-                               │ WebSocket (/ws) & HTTP (/)
+                               │ WebSocket (/ws) raw IQ, HTTP (/)
                                ▼
-Python Backend (aiohttp + NumPy + SciPy)
-├── Static File Server (app/index.html, app/js/*, app/css/*)
-├── WavIQLooper (Streams 16-bit complex IQ WAV of any size, ~16 MB read-ahead buffer)
-├── Standalone DSP Fallback:
-│     ├── SimpleAGC & Software Demodulator (48 kHz mono PCM)
-│     └── Server FFT Spectrum Broadcaster (30 FPS)
-└── WebSocket Handler (/ws)
+Python backend (aiohttp, no NumPy)
+├── Static files (app/)
+├── WavIQLooper (any size WAV, ~16 MB read-ahead)
+└── WebSocket /ws  (0x03 IQ only; per-client queue)
 ```
 
 ## Prerequisites, Technologies used & Dependencies
@@ -106,8 +118,7 @@ Python Backend (aiohttp + NumPy + SciPy)
 | Endpoint | Protocol | Description |
 |----------|----------|-------------|
 | `http://localhost:9000/` | HTTP | Main Web-SDR user interface |
-| `http://localhost:9000/ws` | WebSocket | Real-time bidirectional stream (IQ samples, spectrum, audio, and control messages) |
-| `http://localhost:9000/health` | HTTP | Health check / readiness endpoint |
+| `http://localhost:9000/ws` | WebSocket | Raw 16-bit IQ (`0x03`) plus the text handshake and config JSON |
 
 ## Repository Structure
 
@@ -125,7 +136,7 @@ Python Backend (aiohttp + NumPy + SciPy)
 │   │   ├── cw_filter.js      # CW adaptive IIR & spatial sharpening filter
 │   │   ├── demodulator.js    # Client-side CW/USB/LSB demodulator
 │   │   ├── fft.js            # Client-side Radix-2 FFT engine
-│   │   ├── agc.js            # Optimal two-sided AGC
+│   │   ├── agc.js            # Two-sided AGC (`AGC`)
 │   │   ├── value_dial.js     # Analog tumbler frequency dial
 │   │   └── waterfall.js      # Horizontal waterfall renderer & ruler
 │   └── index.html            # Single-page web application entrypoint
@@ -157,15 +168,14 @@ The GitHub Actions workflows run automatically:
 
 ## Configuration & Environment Variables
 
-The standalone server supports command-line arguments and optional environment variable overrides:
+The standalone server takes command-line arguments only (no environment-variable overrides):
 
-| Argument | Environment Variable | Default | Description |
-|----------|----------------------|---------|-------------|
-| `--host` | `HOST` | `0.0.0.0` | Bind IP address for HTTP and WebSocket |
-| `--port` | `PORT` | `9000` | Listening port for web server |
-| `--wav` | `WAV_PATH` | `samples/SAMPLE_20120219_174346Z_14048kHz_RF.wav` | Path to 16-bit stereo complex IQ WAV file |
-| `--center-freq` | `CENTER_FREQ` | `14048000` | Center frequency in Hz (e.g. 14.048 MHz) |
-| `--fps` | `FPS` | `30` | Spectrum fallback broadcast frame rate |
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--host` | `0.0.0.0` | Bind IP address for HTTP and WebSocket |
+| `--port` | `9000` | Listening port for the web server |
+| `--wav` | `samples/SAMPLE_20120219_174346Z_14048kHz_RF.wav` | Path to a 16-bit stereo complex IQ WAV file |
+| `--center-freq` | `14048000` | Centre frequency in Hz (e.g. 14.048 MHz) |
 
 Example running on a custom port and frequency:
 ```bash
@@ -254,7 +264,7 @@ The container runs as an unprivileged user (`app`, UID 1000) on a minimal Debian
 
 ## CW decoder: possible improvements
 
-The neural CW decoder (`app/js/cw_decoder*.js`, model trained in the sibling repo `didahSDR-cw-training-model`, design in its `PLAN3.md`) is a
+The neural CW decoder (`app/js/cw_decoder*.js`, model trained in the sibling repo `didahSDR-cw-training-model`, design in its `TRAINING.md`) is a
 first version. Observed on real traffic with v2: recognisable contest exchanges, but a CW operator still
 decodes more than the model does. Candidate improvements, grouped by where they live.
 

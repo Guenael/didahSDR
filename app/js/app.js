@@ -9,15 +9,14 @@ document.addEventListener('DOMContentLoaded', () => {
         running: true,
         centerFreq: 14048000,
         sampleRate: 96000,
-        tunedFreq: 14048700,
+        tunedFreq: 14050800,
         modulation: 'cw',
         cwBandwidth: 150,     // 50 to 350 Hz
         cwOffset: 700,        // 400 to 1000 Hz dedicated tone offset (default 700 Hz)
-        bfoPitch: 700,        // BFO pitch matches cwOffset
         lowCut: -75,          // Symmetrical around carrier for CW
         highCut: 75,
         volume: 0.8,
-        minLevel: -127,       // Default -127 dB (FFT levels are window-gain normalised)
+        minLevel: -130,       // Default -130 dB (FFT levels are window-gain normalised)
         dynamicRange: 60,     // Default 60 dB
         primaryTheme: 'viridis',
         stepSize: 100,
@@ -28,9 +27,20 @@ document.addEventListener('DOMContentLoaded', () => {
         agcSpeed: 'medium',
         userHasTuned: false,  // once true, the server's start_freq is no longer applied
         selectedSourceId: 'va2gka',
+        ic7300RadioHz: 0,
+        ic7300Mode: null,
+        ic7300Filter: 1,
+        ic7300TrackRate: 0,
+        ic7300Channels: 0,
         ssbLow: 200,
         ssbHigh: 2700,
         qrssEnabled: false,
+        autonotchEnabled: false,
+        autonotchDepth: 70,
+        nrEnabled: false,
+        nrStrength: 50,
+        squelchEnabled: false,
+        squelchMargin: 10,
         wpm: 20,
         iambicMode: 'B'
     };
@@ -40,17 +50,22 @@ document.addEventListener('DOMContentLoaded', () => {
     let source = findSource(state.selectedSourceId);
     let kiwi = null;
     let sound = null;
+    let ic7300 = null;
+    let rtl = null;
 
-    // 1. Initialize CW Adaptive Filter (from my_adaptive_iir_filter.py)
+    // CW waterfall filter: noise-floor IIR plus the click-sharpening kernel.
     const cwFilter = new CWAdaptiveFilter(state.fftSize);
     cwFilter.enabled = state.filterEnabled;
     cwFilter.setKernel(state.filterKernel);
 
     // 2. Initialize Fast Client-Side Radix-2 FFT Engine
     const clientFft = new DidahFFT(state.fftSize);
+    clientFft.initWindow(state.filterEnabled ? 'flattop' : 'bh4');
 
     // 3. Initialize Client-Side Demodulator with AGC
     const demodulator = new DidahDemodulator(state.sampleRate, 48000);
+    const qrss = new QrssSpectrum();
+    qrss.setInputRate(demodulator.audioRate);
 
     // Neural CW decoder (worker + ONNX). Runs only while its window is open and the mode is CW.
     const cwDecoder = new CWDecoder(demodulator, {
@@ -61,14 +76,59 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateDecoderActive() {
         if (decoderWindowVisible && state.modulation === 'cw') cwDecoder.start(demodulator.audioRate);
         else cwDecoder.stop();
+        updateRecUi();
+    }
+
+    // REC: dataset clip at the decoder tap (REC-BUTTON.md). Any decoder reset / stop ends the clip.
+    const cwRecorder = new CWRecorder({ onStop: (clip) => { saveRecording(clip); updateRecUi(); } });
+    cwDecoder.recorder = cwRecorder;
+    const recBtn = document.getElementById('decoder-rec-btn');
+    const recNoiseBtn = document.getElementById('decoder-noise-btn');
+    let recNoise = false;
+    let recTimer = null;
+    let modelStamp = null;
+    fetch('models/didahcw.onnx', { method: 'HEAD' })
+        .then((r) => { modelStamp = r.headers.get('last-modified'); })
+        .catch(() => {});
+    function updateRecUi() {
+        if (!recBtn) return;
+        const on = cwRecorder.recording;
+        const s = Math.floor(cwRecorder.seconds);
+        recBtn.textContent = on ? `● ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : 'REC';
+        recBtn.classList.toggle('recording', on);
+        recBtn.disabled = !on && !cwDecoder.active;
+        if (recNoiseBtn) {
+            recNoiseBtn.classList.toggle('active', recNoise);
+            recNoiseBtn.disabled = on;
+        }
+        if (on && !recTimer) recTimer = setInterval(updateRecUi, 250);
+        if (!on && recTimer) { clearInterval(recTimer); recTimer = null; }
+    }
+    function toggleRec() {
+        if (cwRecorder.recording) { cwRecorder.stop('user'); return; }
+        if (!cwDecoder.active) return;
+        cwRecorder.start({
+            kind: recNoise ? 'noise' : 'signal',
+            rate: cwDecoder.rate,
+            audioRate: demodulator.audioRate,
+            carrierHz: state.tunedFreq,
+            source: source.label,
+            source_id: source.id,
+            center_freq: state.centerFreq,
+            cw_offset: state.cwOffset,
+            bandwidth: state.cwBandwidth,
+            model: modelStamp,
+        });
+        updateRecUi();
     }
     demodulator.setAgcSpeed(state.agcSpeed);
     demodulator.setCwBandwidth(state.cwBandwidth);
     demodulator.setBfoPitch(state.cwOffset);
+    demodulator.setAutonotchDepth(state.autonotchDepth);
+    demodulator.setNrStrength(state.nrStrength);
+    demodulator.setSquelchMarginDb(state.squelchMargin);
 
-    const keyer = new CwKeyer();
-    keyer.setWpm(state.wpm);
-    keyer.setIambicMode(state.iambicMode);
+    const txPaddle = { dit: false, dah: false, straight: false, armed: false };
     let workletTx = false;
     let workletKeyed = false;
     let txTextGen = 0;
@@ -107,6 +167,12 @@ document.addEventListener('DOMContentLoaded', () => {
         value: state.tunedFreq,
         unit: 'Hz',
         onChange: (newFreq) => {
+            if (source.protocol === 'ic7300') {
+                if (!tuneIc7300FromUser(newFreq)) {
+                    valueDial.setValue(state.ic7300RadioHz > 0 ? state.ic7300RadioHz : state.tunedFreq, false);
+                }
+                return;
+            }
             setTunedFrequency(newFreq, false);
         }
     });
@@ -118,23 +184,31 @@ document.addEventListener('DOMContentLoaded', () => {
     let ringHead = 0;
     let samplesAvailable = 0;
 
-    let blockReal = new Float32Array(state.fftSize);
-    let blockImag = new Float32Array(state.fftSize);
-    let qrssAcc = new Float32Array(state.fftSize);
-    let qrssCount = 0;
+    function qrssPlan() {
+        const speed = Math.max(1, Math.min(8, state.speedMultiplier | 0));
+        const sizes = [8192, 8192, 4096, 4096, 2048, 2048, 1024, 1024];
+        const out = qrss.outRate > 0 ? qrss.outRate : 375;
+        return {
+            fftSize: sizes[speed - 1],
+            average: 9 - speed,
+            hop: Math.max(1, Math.round(out / speed))
+        };
+    }
+
+    let qrssPlanSpeed = -1;
+    function applyQrssPlan() {
+        const plan = qrssPlan();
+        if (qrss.fftSize !== plan.fftSize) qrss.setFftSize(plan.fftSize);
+        if (qrss.avgTarget !== plan.average) qrss.setAverage(plan.average);
+        if (qrss.hop !== plan.hop) qrss.setHop(plan.hop);
+        qrssPlanSpeed = state.speedMultiplier;
+    }
 
     function resetQrssAcc() {
-        qrssAcc.fill(0);
-        qrssCount = 0;
+        qrss.reset();
     }
 
-    /** QRSS: slower columns via Welch-style power averaging. Speed 1x integrates longest. */
-    function qrssAvgCount() {
-        const speed = Math.max(1, Math.min(8, state.speedMultiplier));
-        return Math.max(4, 16 * (9 - speed));
-    }
-
-    // 7b. Initialize SNR S-Meter (0 to 40+ dB above local noise floor)
+    // 7b. Initialize SNR-Meter (0 to 40+ dB above local noise floor)
     const smeter = new DidahSMeter();
     smeter.init();
     smeter.setModeInfo(state.modulation, state.cwBandwidth);
@@ -156,17 +230,35 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function paddleDown() {
-        return keyer.ditDown || keyer.dahDown || keyer.straightDown;
+        return txPaddle.dit || txPaddle.dah || txPaddle.straight;
+    }
+
+    function releasePaddles() {
+        txPaddle.dit = false;
+        txPaddle.dah = false;
+        txPaddle.straight = false;
+        audioPlayer.setKeyerPaddle('dit', false);
+        audioPlayer.setKeyerPaddle('dah', false);
+        audioPlayer.setKeyerStraight(false);
+        updateTrxLeds();
     }
 
     function isLocalTx() {
         return state.modulation === 'cw' && (paddleDown() || workletTx);
     }
 
+    let trxLedKey = '';
     function updateTrxLeds() {
+        const onAir = isLocalTx();
+        const key = (state.running ? '1' : '0')
+            + (isActiveConnected() ? '1' : '0')
+            + (onAir ? '1' : '0')
+            + (workletKeyed ? '1' : '0')
+            + (paddleDown() ? '1' : '0');
+        if (key === trxLedKey) return;
+        trxLedKey = key;
         const rxBtn = document.getElementById('rx-btn');
         const txBtn = document.getElementById('tx-btn');
-        const onAir = isLocalTx();
         if (rxBtn) rxBtn.classList.toggle('active', state.running && isActiveConnected() && !onAir);
         if (txBtn) txBtn.classList.toggle('active', workletKeyed || paddleDown());
     }
@@ -186,10 +278,29 @@ document.addEventListener('DOMContentLoaded', () => {
         return ch;
     }
 
+    let civCwTimer = null;
+
     function syncKeyerText() {
         const el = document.getElementById('tx-text');
+        const text = el ? el.value : '';
+        const catCw = source.protocol === 'ic7300' && ic7300 && ic7300.cat.connected;
+        const paddlesDown = txPaddle.dit || txPaddle.dah || txPaddle.straight;
+        if (catCw && !paddlesDown) {
+            audioPlayer.setKeyerText('', ++txTextGen);
+            if (civCwTimer) clearTimeout(civCwTimer);
+            civCwTimer = setTimeout(() => {
+                civCwTimer = null;
+                if (txPaddle.dit || txPaddle.dah || txPaddle.straight) return;
+                if (ic7300) ic7300.sendCw(text);
+            }, 400);
+            return;
+        }
+        if (civCwTimer) {
+            clearTimeout(civCwTimer);
+            civCwTimer = null;
+        }
         txTextGen++;
-        audioPlayer.setKeyerText(el ? el.value : '', txTextGen);
+        audioPlayer.setKeyerText(text, txTextGen);
     }
 
     function applyKeyerConsumed(consumed, gen) {
@@ -217,11 +328,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 audioPlayer.setKeyerHasText(!!(el && el.value.length));
             }
         }
+        syncIc7300Key();
         updateTrxLeds();
     };
 
     let wasTransmitting = false;
-    function processRawIQ(int16IQ) {
+    function processRawIQ(iq, nComplex) {
         if (!state.running) return;
 
         const useTx = isLocalTx();
@@ -232,64 +344,76 @@ document.addEventListener('DOMContentLoaded', () => {
             resetQrssAcc();
             audioPlayer.resetBuffer();
             if (useTx) cwDecoder.reset();
+            updateTrxLeds();
         }
         wasTransmitting = useTx;
 
-        if (useTx) {
-            updateTrxLeds();
-            return;
-        }
+        if (useTx) return;
 
-        const numComplex = int16IQ.length / 2;
-        audioPlayer.pushFloatAudio(demodulator.process(int16IQ));
+        const numComplex = nComplex == null ? (iq.length >> 1) : nComplex | 0;
+        const audio = demodulator.process(iq, numComplex);
+        cwRecorder.pushAudio(audio);
+        audioPlayer.pushFloatAudio(audio);
 
-        const inv32768 = 1.0 / 32768.0;
         for (let i = 0; i < numComplex; i++) {
-            ringReal[ringHead] = int16IQ[i * 2] * inv32768;
-            ringImag[ringHead] = int16IQ[i * 2 + 1] * inv32768;
+            ringReal[ringHead] = iq[i * 2];
+            ringImag[ringHead] = iq[i * 2 + 1];
             ringHead = ringHead === RING_SIZE - 1 ? 0 : ringHead + 1;
         }
-        samplesAvailable += numComplex;
+        samplesAvailable = capRingAvailable(samplesAvailable + numComplex, RING_SIZE);
 
-        const hopDiv = state.qrssEnabled ? 2 : Math.max(1, state.speedMultiplier);
-        const hopSize = Math.max(128, Math.floor(state.fftSize / hopDiv));
-        const avgN = state.qrssEnabled ? qrssAvgCount() : 1;
+        // Column rate stays a true time axis: WF Speed is still the STFT hop, and a
+        // cap keeps 192 kHz from asking for hundreds of WebGL uploads per second.
+        // A hidden tab skips the FFT; the ring index stays capped so it cannot go negative.
+        if (typeof document !== 'undefined' && document.hidden) return;
+        consumeSpectrumSlices();
+    }
 
-        while (samplesAvailable >= state.fftSize) {
-            let readIdx = (ringHead - samplesAvailable + RING_SIZE) % RING_SIZE;
-            for (let i = 0; i < state.fftSize; i++) {
-                blockReal[i] = ringReal[readIdx];
-                blockImag[i] = ringImag[readIdx];
-                readIdx = readIdx === RING_SIZE - 1 ? 0 : readIdx + 1;
-            }
+    const MAX_SPECTRUM_COLS = 200;
 
-            const specDb = clientFft.computeSpectrumDb(blockReal, blockImag);
+    function spectrumHopSize() {
+        const speed = Math.max(1, state.speedMultiplier);
+        const bySpeed = Math.floor(state.fftSize / speed);
+        const byCap = Math.ceil(state.sampleRate / MAX_SPECTRUM_COLS);
+        return Math.max(1, bySpeed, byCap);
+    }
 
-            if (state.qrssEnabled) {
-                const mag2 = clientFft.mag2Buffer;
-                const n = specDb.length;
-                for (let i = 0; i < n; i++) qrssAcc[i] += mag2[i];
-                qrssCount++;
-                if (qrssCount < avgN) {
-                    samplesAvailable -= hopSize;
-                    continue;
-                }
-                const inv = 1.0 / qrssCount;
-                for (let i = 0; i < n; i++) {
-                    specDb[i] = 10.0 * Math.log10(Math.max(qrssAcc[i] * inv, 1e-15));
-                    qrssAcc[i] = 0;
-                }
-                qrssCount = 0;
-            }
+    function paintSpectrum(specDb, mag2, sampleRate, centerFreq, hopSamples) {
+        const shown = state.filterEnabled ? cwFilter.process(specDb) : specDb;
+        waterfall.addSlice(shown);
+        smeter.updateFromSpectrum(
+            mag2, sampleRate, centerFreq, state.tunedFreq, state.modulation, state.cwBandwidth,
+            clientFft.enbw, hopSamples
+        );
+    }
 
-            const processed = state.filterEnabled ? cwFilter.process(specDb) : specDb;
-            waterfall.addSlice(processed);
-
-            smeter.updateFromSpectrum(specDb, state.sampleRate, state.centerFreq, state.tunedFreq, state.modulation, state.cwBandwidth);
-
+    /** Wideband waterfall. QRSS draws from its own decimator and does not use this ring. */
+    function consumeSpectrumSlices() {
+        if (state.qrssEnabled) {
+            const hop = spectrumHopSize();
+            if (samplesAvailable > hop * 8) samplesAvailable = hop * 8;
+            return;
+        }
+        const hopSize = spectrumHopSize();
+        const n = state.fftSize;
+        while (samplesAvailable >= n) {
+            const start = (ringHead - samplesAvailable + RING_SIZE) % RING_SIZE;
+            const specDb = clientFft.computeSpectrumFromRing(ringReal, ringImag, RING_SIZE, start, true);
+            paintSpectrum(specDb, clientFft.mag2Buffer, state.sampleRate, state.centerFreq, hopSize);
             samplesAvailable -= hopSize;
         }
-        updateTrxLeds();
+    }
+
+    function onQrssSample(i, q) {
+        if (qrssPlanSpeed !== state.speedMultiplier) applyQrssPlan();
+        const spec = qrss.push(i, q);
+        if (!spec || !state.qrssEnabled) return;
+        const shown = state.filterEnabled ? cwFilter.process(spec) : spec;
+        waterfall.addSlice(shown);
+        smeter.updateFromSpectrum(
+            qrss.fft.mag2Buffer, qrss.outRate, state.tunedFreq, state.tunedFreq,
+            state.modulation, state.cwBandwidth, qrss.fft.enbw, qrss.hop
+        );
     }
 
     function resetIqPipeline() {
@@ -301,8 +425,18 @@ document.addEventListener('DOMContentLoaded', () => {
         resetQrssAcc();
     }
 
+    function activeOwner() {
+        if (source.protocol === 'kiwi') return kiwi;
+        if (source.protocol === 'soundcard') return sound;
+        if (source.protocol === 'ic7300') return ic7300;
+        if (source.protocol === 'rtlsdr') return rtl;
+        return conn;
+    }
+
     function applyDialRange() {
-        if (source.protocol === 'soundcard') {
+        if (source.protocol === 'ic7300' && state.ic7300RadioHz > 0) {
+            valueDial.setRange(0, 999999999);
+        } else if (source.protocol === 'soundcard' || source.protocol === 'ic7300') {
             const nyq = Math.max(1000, Math.floor(state.sampleRate / 2));
             valueDial.setRange(-nyq, nyq);
         } else {
@@ -319,8 +453,61 @@ document.addEventListener('DOMContentLoaded', () => {
         resetIqPipeline();
         waterfall.setCenterFreq(state.centerFreq, rate);
         applyDialRange();
-        if (rate < 30000) waterfall.zoomMin();
+        if (state.qrssEnabled) applyQrssView();
+        else if (rate < 30000) waterfall.zoomMin();
         else if (waterfall.zoom <= 1.01) waterfall.setZoom(2.67);
+    }
+
+    /** QRSS replaces the wideband waterfall with a few hundred hertz around the dial. */
+    function applyQrssView() {
+        qrss.setInputRate(demodulator.audioRate);
+        applyQrssPlan();
+        waterfall.zoom = 1;
+        waterfall.panOffset = 0;
+        waterfall.setCenterFreq(state.tunedFreq, qrss.outRate || 375);
+        waterfall.setTunedFreq(state.tunedFreq, state.lowCut, state.highCut, state.modulation);
+    }
+
+    /**
+     * Move the displayed centre immediately so a ruler drag accumulates.
+     * Does not flush the IQ ring; applyCenter does that when the source
+     * confirms a centre we have not already shown.
+     */
+    function shiftCenter(hz) {
+        const next = Math.round(hz);
+        if (next === state.centerFreq) return false;
+        state.centerFreq = next;
+        const half = state.sampleRate / 2;
+        const maxOff = Math.max(0, half - 50);
+        if (state.tunedFreq > state.centerFreq + maxOff) state.tunedFreq = Math.round(state.centerFreq + maxOff);
+        if (state.tunedFreq < state.centerFreq - maxOff) state.tunedFreq = Math.round(state.centerFreq - maxOff);
+        waterfall.panOffset = 0;
+        if (state.qrssEnabled) {
+            waterfall.zoom = 1;
+            waterfall.setCenterFreq(state.tunedFreq, qrss.outRate || 375);
+        } else {
+            waterfall.setCenterFreq(state.centerFreq, state.sampleRate);
+        }
+        demodulator.configure({
+            offsetFreq: state.tunedFreq - state.centerFreq,
+            modulation: state.modulation,
+            cwBandwidth: state.cwBandwidth,
+            bfoPitch: state.cwOffset
+        });
+        waterfall.setTunedFreq(state.tunedFreq, state.lowCut, state.highCut, state.modulation);
+        const dialHz = source.protocol === 'ic7300' && state.ic7300RadioHz > 0
+            ? state.ic7300RadioHz
+            : state.tunedFreq;
+        valueDial.setValue(dialHz, false);
+        updateTopBarInfo();
+        updateSourceStatus();
+        return true;
+    }
+
+    /** Centre the waterfall on the frequency the source actually tuned to. */
+    function applyCenter(hz) {
+        if (!shiftCenter(hz)) return;
+        resetIqPipeline();
     }
 
     const conn = new DidahConnection({
@@ -347,16 +534,23 @@ document.addEventListener('DOMContentLoaded', () => {
             setTunedFrequency(state.tunedFreq, true, false);
             updateTopBarInfo();
             updateSourceStatus();
-
-            conn.setStreamMode('raw_iq');
         },
-        onRawIQ: processRawIQ
+        onRawIQ: (iq, n) => {
+            if (!acceptIq(source.protocol, 'didah', conn.connected, null, null)) return;
+            processRawIQ(iq, n);
+        }
     });
 
     function ensureKiwi() {
         if (kiwi) return kiwi;
         kiwi = new KiwiConnection({
-            onRawIQ: processRawIQ,
+            onRawIQ: (iq, n) => {
+                if (!kiwi || !acceptIq(source.protocol, 'kiwi', kiwi.connected, null, null)) return;
+                processRawIQ(iq, n);
+            },
+            onCenterApplied: (hz) => {
+                if (source.protocol === 'kiwi') applyCenter(hz);
+            },
             onReady: (info) => {
                 if (source.protocol !== 'kiwi') return;
                 applyIqRate(info.sampleRate);
@@ -377,34 +571,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function fillSoundDeviceSelect(devices) {
         const sel = document.getElementById('sound-device');
-        if (!sel) return;
-        const want = sel.value || (sound && sound.deviceId) || '';
-        sel.innerHTML = '';
-        if (!devices.length) {
-            sel.appendChild(new Option('No audio inputs found', ''));
-            sel.classList.remove('has-unsupported');
-            return;
-        }
-        for (let i = 0; i < devices.length; i++) {
-            const d = devices[i];
-            const hz = d.rate || d.native;
-            const rateTxt = hz ? `${(hz / 1000).toFixed(hz % 1000 ? 1 : 0)} kHz` : '?';
-            const opt = new Option(`${d.label} · ${rateTxt}${d.ok ? '' : ' — unsupported'}`, d.id);
-            opt.disabled = !d.ok;
-            if (!d.ok) opt.className = 'is-unsupported';
-            sel.appendChild(opt);
-        }
-        const match = devices.find((d) => d.id === want && d.ok);
-        const firstOk = devices.find((d) => d.ok);
-        sel.value = match ? match.id : (firstOk ? firstOk.id : '');
-        const chosen = devices.find((d) => d.id === sel.value);
-        sel.classList.toggle('has-unsupported', !!(chosen && !chosen.ok));
+        fillDeviceSelect(sel, devices, sel && (sel.value || (sound && sound.deviceId)) || '');
     }
 
     function ensureSound() {
         if (sound) return sound;
         sound = new SoundcardSource({
-            onRawIQ: processRawIQ,
+            onRawIQ: (iq, n) => {
+                if (!sound || !acceptIq(source.protocol, 'soundcard', sound.connected, sound._gen, sound._feedGen)) return;
+                processRawIQ(iq, n);
+            },
             onReady: (info) => {
                 if (source.protocol !== 'soundcard') return;
                 applyIqRate(info.sampleRate);
@@ -425,13 +601,207 @@ document.addEventListener('DOMContentLoaded', () => {
         return sound;
     }
 
-    function isActiveConnected() {
-        if (source.protocol === 'kiwi') return !!(kiwi && kiwi.connected);
-        if (source.protocol === 'soundcard') return !!(sound && sound.connected);
-        return conn.connected;
+    function fillIc7300DeviceSelect(devices) {
+        const sel = document.getElementById('ic7300-device');
+        const want = sel && (sel.value || (ic7300 && ic7300.deviceId)) || '';
+        fillDeviceSelect(sel, devices, want, (d) => /pcm2901/i.test(d.label));
     }
 
-    function connectActive() {
+    function syncIc7300Key() {
+        if (!ic7300) return;
+        const live = source.protocol === 'ic7300'
+            && state.modulation === 'cw'
+            && txPaddle.armed
+            && document.visibilityState !== 'hidden';
+        const wiring = document.getElementById('ic7300-wiring');
+        ic7300.setWiring(wiring && wiring.value === 'ptt-dtr' ? 'ptt-dtr' : 'ptt-rts');
+        ic7300.setLines(live && workletKeyed, live && workletTx);
+    }
+
+    let ic7300FreqTimer = null;
+    let ic7300FreqSent = 0;
+    let ic7300FreqHoldUntil = 0;
+    let ic7300ModeHold = null;
+    let ic7300ModeHoldUntil = 0;
+
+    function ic7300Passband() {
+        if (state.modulation !== 'usb' && state.modulation !== 'lsb') return null;
+        const m = MODES[state.modulation];
+        return m ? { low: m.low, high: m.high } : null;
+    }
+
+    function scheduleIc7300Frequency(hz) {
+        ic7300FreqSent = hz;
+        ic7300FreqHoldUntil = Date.now() + 600;
+        if (ic7300FreqTimer) return;
+        ic7300FreqTimer = setTimeout(() => {
+            ic7300FreqTimer = null;
+            if (ic7300) ic7300.setFrequency(ic7300FreqSent);
+        }, 90);
+    }
+
+    /** Write the IC-7300 VFO. The cursor stays on the IF; only the radio and the dial move. */
+    function tuneIc7300FromUser(radioHz) {
+        if (source.protocol !== 'ic7300') return false;
+        if (!(state.ic7300RadioHz > 0) || !ic7300 || !ic7300.cat.connected) return false;
+        const hz = Math.max(1000, Math.min(74800000, Math.round(radioHz)));
+        if (hz === state.ic7300RadioHz) return true;
+        state.ic7300RadioHz = hz;
+        applyIc7300Tuning();
+        scheduleIc7300Frequency(hz);
+        return true;
+    }
+
+    function selectIc7300Mode(mod) {
+        const byte = didahToCivMode(mod);
+        if (byte == null) return;
+        if (byte === state.ic7300Mode && state.modulation === mod) return;
+        state.ic7300Mode = byte;
+        ic7300ModeHold = byte;
+        ic7300ModeHoldUntil = Date.now() + 600;
+        applyIc7300Tuning();
+        if (ic7300 && ic7300.cat.connected) ic7300.setMode(byte, state.ic7300Filter || 1);
+    }
+
+    function applyIc7300View() {
+        waterfall.viewLock = true;
+        valueDial.locked = !(state.ic7300RadioHz > 0);
+        const view = ic7300View(state.ic7300Mode, state.sampleRate, ic7300Passband());
+        const cap = waterfall.maxZoom > 0 ? waterfall.maxZoom : 24;
+        waterfall.setZoom(Math.max(1, Math.min(cap, state.sampleRate / view.span)));
+        waterfall.panOffset = view.audioCenter;
+        waterfall.clampPan();
+        waterfall.refreshChrome();
+        if (state.ic7300RadioHz > 0) valueDial.setValue(state.ic7300RadioHz, false);
+    }
+
+    function releaseIc7300View() {
+        waterfall.viewLock = false;
+        valueDial.locked = false;
+        waterfall.panOffset = 0;
+        waterfall.setZoom(2.67);
+    }
+
+    /** Follow a CI-V report. Audio offset stays put; only the ruler and dial move. */
+    function applyIc7300Tuning() {
+        if (source.protocol !== 'ic7300') return;
+        const g = ic7300Geometry(state.ic7300RadioHz, state.ic7300Mode, state.sampleRate);
+        const offset = g.tunedFreq - g.centerFreq;
+        const prevOffset = state.tunedFreq - state.centerFreq;
+        const modSame = state.modulation === g.modulation;
+        state.centerFreq = g.centerFreq;
+        state.tunedFreq = g.tunedFreq;
+        applyDialRange();
+        if (!modSame) {
+            setModulation(g.modulation);
+        } else if (offset !== prevOffset) {
+            setTunedFrequency(g.tunedFreq, true, false);
+        } else {
+            waterfall.setCenterFreq(g.centerFreq, state.sampleRate);
+            waterfall.setTunedFreq(g.tunedFreq, state.lowCut, state.highCut, state.modulation);
+        }
+        applyIc7300View();
+        updateTopBarInfo();
+        updateSourceStatus();
+    }
+
+    function ensureIc7300() {
+        if (ic7300) return ic7300;
+        ic7300 = new Ic7300Source({
+            onRawIQ: (iq, n) => {
+                if (!ic7300 || !acceptIq(source.protocol, 'ic7300', ic7300.connected, ic7300._gen, ic7300._feedGen)) return;
+                processRawIQ(iq, n);
+            },
+            onReady: (info) => {
+                state.ic7300TrackRate = info.trackRate || 0;
+                state.ic7300Channels = info.channels || 0;
+                if (source.protocol !== 'ic7300') return;
+                applyIqRate(info.sampleRate);
+                applyIc7300Tuning();
+                updateTopBarInfo();
+                updateSourceStatus();
+            },
+            onStatusChange: (statusText) => {
+                const btn = document.getElementById('ic7300-serial-btn');
+                if (btn && ic7300) btn.textContent = ic7300.cat.connected ? 'Disconnect' : 'Connect';
+                if (source.protocol !== 'ic7300') return;
+                setStatus(statusText, !!(ic7300 && ic7300.connected));
+                updateSourceStatus();
+            },
+            onDevices: fillIc7300DeviceSelect,
+            onFrequency: (hz) => {
+                if (Date.now() < ic7300FreqHoldUntil && hz !== ic7300FreqSent) return;
+                if (hz === ic7300FreqSent) ic7300FreqHoldUntil = 0;
+                if (hz === state.ic7300RadioHz) return;
+                state.ic7300RadioHz = hz;
+                applyIc7300Tuning();
+            },
+            onMode: (mode, filter) => {
+                if (filter) state.ic7300Filter = filter;
+                if (Date.now() < ic7300ModeHoldUntil && mode !== ic7300ModeHold) return;
+                if (mode === ic7300ModeHold) ic7300ModeHoldUntil = 0;
+                if (mode === state.ic7300Mode) return;
+                state.ic7300Mode = mode;
+                applyIc7300Tuning();
+            }
+        });
+        const baudEl = document.getElementById('ic7300-baud');
+        if (baudEl) ic7300.cat.baud = parseInt(baudEl.value, 10) || CIV_BAUD_DEFAULT;
+        return ic7300;
+    }
+
+    function applyRtlControls(rig) {
+        const modeEl = document.getElementById('rtlsdr-mode');
+        const gainEl = document.getElementById('rtlsdr-gain');
+        const ppmEl = document.getElementById('rtlsdr-ppm');
+        const upEl = document.getElementById('rtlsdr-upconverter');
+        const biasEl = document.getElementById('rtlsdr-bias');
+        if (modeEl) rig.setMode(modeEl.value);
+        if (gainEl) rig.setGainDb(gainEl.value === 'auto' ? null : Number(gainEl.value));
+        if (ppmEl) rig.setPpm(ppmEl.value);
+        if (upEl) rig.setUpconverterHz(upEl.value);
+        if (biasEl) rig.setBiasTee(biasEl.checked);
+    }
+
+    function ensureRtl() {
+        if (rtl) return rtl;
+        rtl = new RtlSdrSource({
+            onRawIQ: (iq, n) => {
+                if (!rtl || !acceptIq(source.protocol, 'rtlsdr', rtl.connected, rtl._gen, rtl._feedGen)) return;
+                processRawIQ(iq, n);
+            },
+            onCenterApplied: (hz) => {
+                if (source.protocol === 'rtlsdr') applyCenter(hz);
+            },
+            onReady: (info) => {
+                if (source.protocol !== 'rtlsdr') return;
+                applyIqRate(info.sampleRate || RTL_IQ_RATE);
+                if (info.centerFreq) state.centerFreq = info.centerFreq;
+                waterfall.setCenterFreq(state.centerFreq, state.sampleRate);
+                if (waterfall.zoom <= 1.01) waterfall.setZoom(2.67);
+                setTunedFrequency(state.tunedFreq, true, false);
+                updateTopBarInfo();
+                updateSourceStatus();
+            },
+            onStatusChange: (statusText, isConnected) => {
+                const btn = document.getElementById('rtlsdr-connect-btn');
+                if (btn && rtl) btn.textContent = rtl.connected ? 'Disconnect' : 'Connect';
+                if (source.protocol !== 'rtlsdr') return;
+                setStatus(statusText, !!isConnected);
+                updateSourceStatus();
+            }
+        });
+        applyRtlControls(rtl);
+        rtl.setDisplayHz(state.centerFreq || 14048000);
+        return rtl;
+    }
+
+    function isActiveConnected() {
+        const owner = activeOwner();
+        return !!(owner && owner.connected);
+    }
+
+    function connectActive(allowUsbPicker) {
         if (source.protocol === 'kiwi') {
             const k = ensureKiwi();
             k.host = source.host;
@@ -456,6 +826,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             s.start(id);
+        } else if (source.protocol === 'ic7300') {
+            const rig = ensureIc7300();
+            const sel = document.getElementById('ic7300-device');
+            const id = (sel && sel.value) || rig.deviceId;
+            if (!id) {
+                rig.enable().then((ok) => {
+                    if (!ok || source.protocol !== 'ic7300' || !state.running) return;
+                    const sel2 = document.getElementById('ic7300-device');
+                    if (sel2 && sel2.value) rig.start(sel2.value);
+                });
+                return;
+            }
+            rig.start(id);
+        } else if (source.protocol === 'rtlsdr') {
+            const rig = ensureRtl();
+            applyRtlControls(rig);
+            rig.setDisplayHz(state.centerFreq);
+            if (rig.connected || allowUsbPicker) rig.start();
+            else setStatus('Press Connect to open the RTL-SDR', false);
         } else {
             conn.connect();
         }
@@ -464,6 +853,8 @@ document.addEventListener('DOMContentLoaded', () => {
     function disconnectTransports() {
         if (kiwi) kiwi.disconnect();
         if (sound) sound.stop();
+        if (ic7300) ic7300.stop();
+        if (rtl) rtl.close();
         conn.disconnect();
     }
 
@@ -488,45 +879,73 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
     waterfall.onPanCallback = (deltaHz) => {
-        if (source.protocol !== 'kiwi') {
-            waterfall.panOffset += deltaHz;
-            waterfall.clampPan();
-            waterfall.refreshChrome();
+        if (source.protocol === 'ic7300') {
+            tuneIc7300FromUser(state.ic7300RadioHz + deltaHz);
             return;
         }
-        state.centerFreq = Math.round(state.centerFreq + deltaHz);
-        const half = state.sampleRate / 2;
-        const maxOff = Math.max(0, half - 50);
-        if (state.tunedFreq > state.centerFreq + maxOff) state.tunedFreq = Math.round(state.centerFreq + maxOff);
-        if (state.tunedFreq < state.centerFreq - maxOff) state.tunedFreq = Math.round(state.centerFreq - maxOff);
-        waterfall.panOffset = 0;
-        waterfall.setCenterFreq(state.centerFreq, state.sampleRate);
-        if (kiwi) kiwi.tune(state.centerFreq);
-        setTunedFrequency(state.tunedFreq, true, true);
-        updateTopBarInfo();
-        updateSourceStatus();
+        if (source.protocol === 'kiwi' || source.protocol === 'rtlsdr') {
+            const next = Math.round(state.centerFreq + deltaHz);
+            shiftCenter(next);
+            if (source.protocol === 'kiwi' && kiwi && kiwi.connected) kiwi.tune(state.centerFreq);
+            else if (source.protocol === 'rtlsdr' && rtl && rtl.connected) rtl.setDisplayHz(state.centerFreq);
+            return;
+        }
+        waterfall.panOffset += deltaHz;
+        waterfall.clampPan();
+        waterfall.refreshChrome();
     };
 
     /**
      * The one place demod / waterfall / server state is updated from a new VFO frequency.
      * @param {boolean} fromUser - false only for server-config or internal re-application
      */
+    let tuneResetTimer = null;
+    let pendingTuneHz = 0;      // net retune since the last decoder / NLMS reset
+    function flushTuneReset() {
+        if (tuneResetTimer) {
+            clearTimeout(tuneResetTimer);
+            tuneResetTimer = null;
+        }
+        pendingTuneHz = 0;
+        demodulator._resetAudioFx();
+        cwDecoder.reset();
+    }
+    /**
+     * Large steps and mode changes reset now. Small steps add up; once the dial rests for
+     * 300 ms, reset only if the net move exceeds LARGE_RETUNE_HZ (the model tolerates ±200 Hz).
+     */
+    function noteTuneReset(deltaHz, immediate) {
+        pendingTuneHz += deltaHz;
+        if (immediate || Math.abs(deltaHz) > LARGE_RETUNE_HZ) {
+            flushTuneReset();
+            return;
+        }
+        if (tuneResetTimer) clearTimeout(tuneResetTimer);
+        tuneResetTimer = setTimeout(() => {
+            tuneResetTimer = null;
+            if (Math.abs(pendingTuneHz) > LARGE_RETUNE_HZ) flushTuneReset();
+        }, 300);
+    }
+
     function setTunedFrequency(freq, updateDial = true, fromUser = true) {
+        if (fromUser && source.protocol === 'ic7300') return;
+        const prevTuned = state.tunedFreq;
+        const prevMod = demodulator.modulation;
         state.tunedFreq = Math.round(freq);
         if (fromUser) state.userHasTuned = true;
         if (updateDial) {
-            valueDial.setValue(state.tunedFreq, false);
+            const dialHz = source.protocol === 'ic7300' && state.ic7300RadioHz > 0
+                ? state.ic7300RadioHz
+                : state.tunedFreq;
+            valueDial.setValue(dialHz, false);
         }
 
-        if (source.protocol === 'kiwi') {
+        if (source.protocol === 'kiwi' || source.protocol === 'rtlsdr') {
             const half = state.sampleRate / 2;
             if (Math.abs(state.tunedFreq - state.centerFreq) > half - 50) {
-                state.centerFreq = state.tunedFreq;
-                waterfall.panOffset = 0;
-                waterfall.setCenterFreq(state.centerFreq, state.sampleRate);
-                if (kiwi) kiwi.tune(state.centerFreq);
-                updateTopBarInfo();
-                updateSourceStatus();
+                shiftCenter(state.tunedFreq);
+                if (source.protocol === 'kiwi' && kiwi && kiwi.connected) kiwi.tune(state.centerFreq);
+                else if (source.protocol === 'rtlsdr' && rtl && rtl.connected) rtl.setDisplayHz(state.centerFreq);
             }
         }
 
@@ -548,7 +967,14 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         waterfall.setTunedFreq(state.tunedFreq, state.lowCut, state.highCut, state.modulation);
-        cwDecoder.reset();
+        noteTuneReset(state.tunedFreq - prevTuned, state.modulation !== prevMod);
+        if (state.qrssEnabled) {
+            qrss.reset();
+            waterfall.zoom = 1;
+            waterfall.panOffset = 0;
+            waterfall.setCenterFreq(state.tunedFreq, qrss.outRate || 375);
+            waterfall.clear();
+        }
         sendDspControl();
     }
 
@@ -590,15 +1016,15 @@ document.addEventListener('DOMContentLoaded', () => {
         smeter.setModeInfo(state.modulation, state.cwBandwidth);
         updateDecoderActive();
         if (!cw) {
-            keyer.armed = false;
-            keyer.stopText = true;
-            keyer.abort();
+            txPaddle.armed = false;
+            releasePaddles();
             audioPlayer.abortKeyer();
             workletTx = false;
             workletKeyed = false;
             wasTransmitting = false;
         }
         updateTxUi();
+        syncIc7300Key();
         updateTrxLeds();
     }
 
@@ -622,6 +1048,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!el) return;
         const proto = source.protocol === 'kiwi' ? 'KiwiSDR SND IQ'
             : source.protocol === 'soundcard' ? 'Sound card IQ'
+            : source.protocol === 'ic7300' ? 'IC-7300 IF'
+            : source.protocol === 'rtlsdr' ? 'RTL-SDR IQ'
             : 'didah 0x03 IQ';
         const khz = state.sampleRate / 1000;
         const srTxt = `${Number.isInteger(khz) ? khz : khz.toFixed(2)} kHz`;
@@ -631,6 +1059,22 @@ document.addEventListener('DOMContentLoaded', () => {
             extra = ` ${source.host}:${source.port}. Waterfall is a 12 kHz zoom; mouse and wheel move the Kiwi DDC.`;
         } else if (source.protocol === 'soundcard') {
             extra = ' Centre is 0 Hz (offset). Swap I/Q if the spectrum is reversed.';
+        } else if (source.protocol === 'ic7300') {
+            const g = ic7300Geometry(state.ic7300RadioHz, state.ic7300Mode, state.sampleRate);
+            const track = state.ic7300TrackRate ? ` track ${(state.ic7300TrackRate / 1000)} kHz` : '';
+            const ch = state.ic7300Channels ? ` ${state.ic7300Channels} ch` : '';
+            const vfo = state.ic7300RadioHz
+                ? ` VFO ${formatCenter(state.ic7300RadioHz)} ${g.label}.`
+                : ' Waiting for CI-V. Cursor at −650 Hz.';
+            const serial = ic7300 ? ` ${ic7300.serialText}` : '';
+            extra = `${track}${ch}.${vfo}${serial} Cursor stays on the signal.`;
+        } else if (source.protocol === 'rtlsdr') {
+            const modeEl = document.getElementById('rtlsdr-mode');
+            const mode = modeEl ? modeEl.value : 'direct-q';
+            const hfOnTuner = mode === 'tuner' && state.centerFreq < 24000000;
+            extra = hfOnTuner
+                ? ' Tuner mode does not hear HF. Use direct sampling Q on a Blog V3, or set an upconverter offset.'
+                : ' Dongle LO is 384 kHz above the dial. Wheel tunes inside the 192 kHz window.';
         }
         el.textContent = `${proto} · ${srTxt} · CF ${cf}.${extra}`;
     }
@@ -650,7 +1094,7 @@ document.addEventListener('DOMContentLoaded', () => {
             urlEl.title = parsed.href;
             urlEl.value = parsed.href;
         }
-        const kiwiSrc = findSource('f4kiy');
+        const kiwiSrc = findSource('oh5ae');
         kiwiSrc.host = parsed.host;
         kiwiSrc.port = parsed.port;
         kiwiSrc.secure = parsed.secure;
@@ -663,20 +1107,26 @@ document.addEventListener('DOMContentLoaded', () => {
             setStatus('Invalid KiwiSDR URL', false);
             return;
         }
-        const radio = document.querySelector('input[name="iq-source"][value="f4kiy"]');
+        const radio = document.querySelector('input[name="iq-source"][value="oh5ae"]');
         if (radio && !radio.checked) {
             radio.checked = true;
-            selectSource('f4kiy', true);
+            selectSource('oh5ae', true);
             return;
         }
         updateSourceStatus();
         if (!state.running) return;
-        const kiwiSrc = findSource('f4kiy');
+        const kiwiSrc = findSource('oh5ae');
         setStatus(`Connecting to ${kiwiSrc.host}:${kiwiSrc.port}…`, false);
         connectActive();
     }
 
-    function applySourcePresets(src) {
+    function applySourcePresets(src, force) {
+        let seen = {};
+        try { seen = JSON.parse(localStorage.getItem('didah_presets_seen') || '{}') || {}; } catch (e) { seen = {}; }
+        if (src.id === 'oh5ae' && seen.f4kiy && !seen.oh5ae) seen.oh5ae = 1;
+        if (!force && seen[src.id]) return;
+        seen[src.id] = 1;
+        try { localStorage.setItem('didah_presets_seen', JSON.stringify(seen)); } catch (e) { /* storage unavailable */ }
         const minEl = document.getElementById('min-lvl-slider');
         const dynEl = document.getElementById('dyn-range-slider');
         const fftEl = document.getElementById('fft-select');
@@ -697,6 +1147,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function selectSource(id, fromUser) {
         const src = findSource(id);
         const switching = src.id !== source.id;
+        const prevProtocol = source.protocol;
+        const prevTuned = state.tunedFreq;
+        const prevRadio = state.ic7300RadioHz;
         source = src;
         state.selectedSourceId = src.id;
         document.querySelectorAll('input[name="iq-source"]').forEach((el) => {
@@ -708,24 +1161,49 @@ document.addEventListener('DOMContentLoaded', () => {
             updateSourceStatus();
             return;
         }
+        if (prevProtocol === 'ic7300') {
+            releaseIc7300View();
+            if (ic7300 && ic7300.cat.connected) ic7300.disconnectSerial();
+        }
+        syncIc7300Key();
         disconnectTransports();
         resetIqPipeline();
         lastDspControl = '';
         state.userHasTuned = false;
-        state.tunedFreq = src.startFreq;
+        const entryHz = src.protocol === 'kiwi'
+            ? kiwiEntryFrequency({
+                protocol: prevProtocol,
+                tunedFreq: prevTuned,
+                radioHz: prevRadio,
+                fromUser: !!fromUser
+            })
+            : src.startFreq;
+        state.tunedFreq = entryHz;
         if (src.protocol === 'kiwi') {
-            state.centerFreq = src.startFreq;
+            state.centerFreq = entryHz;
             applyIqRate(12000);
-            if (kiwi) kiwi.ddcHz = src.startFreq;
+            if (kiwi) kiwi.ddcHz = entryHz;
         } else if (src.protocol === 'soundcard') {
             state.centerFreq = 0;
             applyIqRate((sound && sound.sampleRate) || 96000);
+        } else if (src.protocol === 'ic7300') {
+            applyIqRate((ic7300 && ic7300.sampleRate) || 12000);
+            applyIc7300Tuning();
+        } else if (src.protocol === 'rtlsdr') {
+            state.centerFreq = src.startFreq;
+            applyIqRate(RTL_IQ_RATE);
+            if (rtl) {
+                applyRtlControls(rtl);
+                rtl.setDisplayHz(state.centerFreq);
+            }
         } else {
             state.centerFreq = 14048000;
             applyIqRate(96000);
         }
-        valueDial.setValue(state.tunedFreq, false);
-        setModulation(src.startMod);
+        if (src.protocol !== 'ic7300') {
+            valueDial.setValue(state.tunedFreq, false);
+            setModulation(src.startMod);
+        }
         state.userHasTuned = false;
         updateTopBarInfo();
         updateSourceStatus();
@@ -737,7 +1215,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
         }
-        connectActive();
+        connectActive(fromUser);
     }
 
     // =========================================================================
@@ -754,18 +1232,20 @@ document.addEventListener('DOMContentLoaded', () => {
         if (state.running) {
             audioPlayer.resume();
             if (!isActiveConnected()) {
-                connectActive();
+                connectActive(true);
+            } else if (source.protocol === 'rtlsdr' && rtl) {
+                rtl.start();
             }
         } else {
-            keyer.abort();
-            keyer.stopText = true;
+            txPaddle.armed = false;
             audioPlayer.abortKeyer();
             workletTx = false;
             workletKeyed = false;
             wasTransmitting = false;
             audioPlayer.stop();
             smeter.reset();
-            if (source.protocol === 'soundcard' && sound) sound.stop();
+            disconnectTransports();
+            syncIc7300Key();
             updateTrxLeds();
         }
     });
@@ -811,11 +1291,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // 3. Mode Buttons (USB, LSB, CW)
     document.querySelectorAll('.mode-btn').forEach(btn => {
         btn.addEventListener('click', () => {
+            if (source.protocol === 'ic7300') {
+                selectIc7300Mode(btn.dataset.mode);
+                return;
+            }
             setModulation(btn.dataset.mode);
         });
     });
 
-    // 4. Config floating window (waterfall / CW / SSB), same behaviour as the S-Meter window
+    // 4. Config floating window (waterfall / CW / SSB), same behaviour as the SNR-Meter window
     setupFloatingWindow({
         windowId: 'wconfig-window', headerId: 'wconfig-header', closeBtnId: 'wconfig-close-btn',
         toggleBtnId: 'wconfig-btn', storageKey: 'didah_wconfig', defaultVisible: false,
@@ -837,6 +1321,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     const decoderClearBtn = document.getElementById('decoder-clear-btn');
     if (decoderClearBtn) decoderClearBtn.addEventListener('click', () => cwDecoder.clear());
+    if (recBtn) recBtn.addEventListener('click', toggleRec);
+    if (recNoiseBtn) recNoiseBtn.addEventListener('click', () => { recNoise = !recNoise; updateRecUi(); });
+    updateRecUi();
 
     // 5. Tuning Step Selector (also driven by the + / - keys)
     const stepSelect = document.getElementById('step-select');
@@ -859,9 +1346,6 @@ document.addEventListener('DOMContentLoaded', () => {
         state.fftSize = parseInt(e.target.value, 10);
         clientFft.setSize(state.fftSize);
         cwFilter.resize(state.fftSize);
-        blockReal = new Float32Array(state.fftSize);
-        blockImag = new Float32Array(state.fftSize);
-        qrssAcc = new Float32Array(state.fftSize);
         resetQrssAcc();
         samplesAvailable = 0;
     });
@@ -932,7 +1416,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (cwOffsetSlider) {
         cwOffsetSlider.addEventListener('input', (e) => {
             state.cwOffset = parseInt(e.target.value, 10);
-            state.bfoPitch = state.cwOffset;
             if (cwOffsetVal) cwOffsetVal.textContent = `${state.cwOffset} Hz`;
             audioPlayer.setSidetoneHz(state.cwOffset);
             setTunedFrequency(state.tunedFreq, false, false);
@@ -963,6 +1446,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (lowVal) lowVal.textContent = `${pb.low} Hz`;
         if (highVal) highVal.textContent = `${pb.high} Hz`;
         if (state.modulation !== 'cw') setTunedFrequency(state.tunedFreq, false, false);
+        if (source.protocol === 'ic7300') applyIc7300View();
         smeter.setModeInfo(state.modulation, state.cwBandwidth);
     }
 
@@ -980,19 +1464,44 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // 10. CW Adaptive Filter, QRSS, and Click Filter
+    // 10. CW waterfall filter and QRSS
+    function applySpectrumWindow() {
+        clientFft.initWindow(state.filterEnabled ? 'flattop' : 'bh4');
+    }
+
     const cwFilterToggle = document.getElementById('cw-filter-toggle');
     cwFilterToggle.addEventListener('click', () => {
         state.filterEnabled = !state.filterEnabled;
         cwFilter.enabled = state.filterEnabled;
+        applySpectrumWindow();
         cwFilterToggle.classList.toggle('active', state.filterEnabled);
         cwFilterToggle.textContent = state.filterEnabled ? 'CW Filter: ON' : 'CW Filter: OFF';
     });
 
+    let qrssSavedView = null;
     function setQrssEnabled(on) {
-        state.qrssEnabled = !!on;
-        clientFft.initWindow(state.qrssEnabled ? 'blackman' : 'flattop');
-        resetQrssAcc();
+        const next = !!on;
+        if (next === state.qrssEnabled) return;
+        state.qrssEnabled = next;
+        if (next) {
+            qrssSavedView = { zoom: waterfall.zoom, pan: waterfall.panOffset };
+            demodulator.qrssPush = onQrssSample;
+            qrss.reset();
+            applyQrssView();
+            waterfall.clear();
+        } else {
+            demodulator.qrssPush = null;
+            qrss.reset();
+            if (qrssSavedView) {
+                waterfall.zoom = qrssSavedView.zoom;
+                waterfall.panOffset = qrssSavedView.pan;
+            }
+            waterfall.setCenterFreq(state.centerFreq, state.sampleRate);
+            waterfall.setTunedFreq(state.tunedFreq, state.lowCut, state.highCut, state.modulation);
+            waterfall.clear();
+            ringHead = 0;
+            samplesAvailable = 0;
+        }
         const btn = document.getElementById('qrss-toggle');
         if (btn) {
             btn.classList.toggle('active', state.qrssEnabled);
@@ -1003,6 +1512,79 @@ document.addEventListener('DOMContentLoaded', () => {
     const qrssToggle = document.getElementById('qrss-toggle');
     if (qrssToggle) {
         qrssToggle.addEventListener('click', () => setQrssEnabled(!state.qrssEnabled));
+    }
+
+    function setAutonotchEnabled(on) {
+        state.autonotchEnabled = !!on;
+        demodulator.setAutonotchEnabled(state.autonotchEnabled);
+        const btn = document.getElementById('autonotch-toggle');
+        if (btn) {
+            btn.classList.toggle('active', state.autonotchEnabled);
+            btn.textContent = state.autonotchEnabled ? 'Autonotch: ON' : 'Autonotch: OFF';
+        }
+    }
+
+    function setNrEnabled(on) {
+        state.nrEnabled = !!on;
+        demodulator.setNrEnabled(state.nrEnabled);
+        const btn = document.getElementById('nr-toggle');
+        if (btn) {
+            btn.classList.toggle('active', state.nrEnabled);
+            btn.textContent = state.nrEnabled ? 'Noise Reduction: ON' : 'Noise Reduction: OFF';
+        }
+    }
+
+    function setSquelchEnabled(on) {
+        state.squelchEnabled = !!on;
+        demodulator.setSquelchEnabled(state.squelchEnabled);
+        const btn = document.getElementById('squelch-toggle');
+        if (btn) {
+            btn.classList.toggle('active', state.squelchEnabled);
+            btn.textContent = state.squelchEnabled ? 'Squelch: ON' : 'Squelch: OFF';
+        }
+    }
+
+    const autonotchToggle = document.getElementById('autonotch-toggle');
+    if (autonotchToggle) {
+        autonotchToggle.addEventListener('click', () => setAutonotchEnabled(!state.autonotchEnabled));
+    }
+    const nrToggle = document.getElementById('nr-toggle');
+    if (nrToggle) {
+        nrToggle.addEventListener('click', () => setNrEnabled(!state.nrEnabled));
+    }
+    const squelchToggle = document.getElementById('squelch-toggle');
+    if (squelchToggle) {
+        squelchToggle.addEventListener('click', () => setSquelchEnabled(!state.squelchEnabled));
+    }
+
+    const autonotchDepthSlider = document.getElementById('autonotch-depth-slider');
+    const autonotchDepthVal = document.getElementById('autonotch-depth-val');
+    if (autonotchDepthSlider) {
+        autonotchDepthSlider.addEventListener('input', (e) => {
+            state.autonotchDepth = parseInt(e.target.value, 10);
+            if (autonotchDepthVal) autonotchDepthVal.textContent = `${state.autonotchDepth}%`;
+            demodulator.setAutonotchDepth(state.autonotchDepth);
+        });
+    }
+
+    const nrStrengthSlider = document.getElementById('nr-strength-slider');
+    const nrStrengthVal = document.getElementById('nr-strength-val');
+    if (nrStrengthSlider) {
+        nrStrengthSlider.addEventListener('input', (e) => {
+            state.nrStrength = parseInt(e.target.value, 10);
+            if (nrStrengthVal) nrStrengthVal.textContent = `${state.nrStrength}%`;
+            demodulator.setNrStrength(state.nrStrength);
+        });
+    }
+
+    const squelchThrSlider = document.getElementById('squelch-thr-slider');
+    const squelchThrVal = document.getElementById('squelch-thr-val');
+    if (squelchThrSlider) {
+        squelchThrSlider.addEventListener('input', (e) => {
+            state.squelchMargin = parseInt(e.target.value, 10);
+            if (squelchThrVal) squelchThrVal.textContent = `${state.squelchMargin} dB`;
+            demodulator.setSquelchMarginDb(state.squelchMargin);
+        });
     }
 
     const kernelSelect = document.getElementById('kernel-select');
@@ -1021,7 +1603,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const txRow = document.getElementById('tx-row');
         if (armBtn) {
             armBtn.disabled = !cw;
-            const armed = cw && keyer.armed;
+            const armed = cw && txPaddle.armed;
             armBtn.classList.toggle('armed', armed);
             armBtn.textContent = armed ? 'PTT On' : 'PTT Off';
         }
@@ -1032,11 +1614,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function setTxArmed(on) {
         const cw = state.modulation === 'cw';
-        keyer.armed = cw && !!on;
-        keyer.stopText = !keyer.armed;
-        audioPlayer.setKeyerArmed(keyer.armed);
-        if (keyer.armed) syncKeyerText();
-        else audioPlayer.setKeyerHasText(false);
+        txPaddle.armed = cw && !!on;
+        audioPlayer.setKeyerArmed(txPaddle.armed);
+        if (txPaddle.armed) syncKeyerText();
+        else {
+            audioPlayer.setKeyerHasText(false);
+            releasePaddles();
+        }
+        syncIc7300Key();
         updateTxUi();
     }
 
@@ -1044,7 +1629,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (txArmBtn) {
         txArmBtn.addEventListener('click', () => {
             if (state.modulation !== 'cw') return;
-            setTxArmed(!keyer.armed);
+            setTxArmed(!txPaddle.armed);
         });
     }
 
@@ -1062,7 +1647,7 @@ document.addEventListener('DOMContentLoaded', () => {
         applyTxSanitize();
         txTextInput.addEventListener('input', () => {
             applyTxSanitize();
-            if (keyer.armed) syncKeyerText();
+            if (txPaddle.armed) syncKeyerText();
         });
     }
 
@@ -1071,8 +1656,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (wpmSlider) {
         wpmSlider.addEventListener('input', (e) => {
             state.wpm = parseInt(e.target.value, 10);
-            keyer.setWpm(state.wpm);
             audioPlayer.setKeyerWpm(state.wpm);
+            if (ic7300 && ic7300.cat.connected) ic7300.setCwSpeed(state.wpm);
             if (wpmVal) wpmVal.textContent = String(state.wpm);
         });
     }
@@ -1081,7 +1666,6 @@ document.addEventListener('DOMContentLoaded', () => {
         el.addEventListener('change', () => {
             if (!el.checked) return;
             state.iambicMode = el.value === 'A' ? 'A' : 'B';
-            keyer.setIambicMode(state.iambicMode);
             audioPlayer.setKeyerIambic(state.iambicMode);
         });
     });
@@ -1111,18 +1695,32 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        if (e.key === 'Enter') {
+            const tag = e.target && e.target.tagName;
+            const inField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+            const inCwText = e.target && e.target.id === 'tx-text';
+            if (inField && !inCwText) return;
+            if (state.modulation !== 'cw') return;
+            e.preventDefault();
+            setTxArmed(!txPaddle.armed);
+            return;
+        }
+
         const paddle = PADDLE_KEYS[e.key];
         if (paddle) {
             e.preventDefault();
             if (e.repeat) return;
-            if (state.modulation !== 'cw') return;
+            if (state.modulation !== 'cw' || !txPaddle.armed) return;
             audioPlayer.resume();
             if (paddle === 'straight') {
-                keyer.setStraight(true);
+                txPaddle.straight = true;
                 audioPlayer.setKeyerStraight(true);
+            } else if (paddle === 'dit') {
+                txPaddle.dit = true;
+                audioPlayer.setKeyerPaddle('dit', true);
             } else {
-                keyer.setPaddle(paddle, true);
-                audioPlayer.setKeyerPaddle(paddle, true);
+                txPaddle.dah = true;
+                audioPlayer.setKeyerPaddle('dah', true);
             }
             updateTrxLeds();
             return;
@@ -1141,7 +1739,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const modes = ['cw', 'usb', 'lsb'];
             const curIdx = modes.indexOf(state.modulation);
             const nextMode = modes[(curIdx + 1) % modes.length];
-            setModulation(nextMode);
+            if (source.protocol === 'ic7300') selectIc7300Mode(nextMode);
+            else setModulation(nextMode);
+        } else if (source.protocol === 'ic7300' && (
+            e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Home' || e.key === 'End'
+        )) {
+            if (!inDial) e.preventDefault();
         } else if (e.key === '+' || e.key === '=') {
             e.preventDefault();
             cycleStep(+1);
@@ -1162,10 +1765,12 @@ document.addEventListener('DOMContentLoaded', () => {
             waterfall.zoomMax();
         } else if (e.key === 'ArrowUp' && !inDial) {
             e.preventDefault();
-            setTunedFrequency(state.tunedFreq + state.stepSize);
+            if (source.protocol === 'ic7300') tuneIc7300FromUser(state.ic7300RadioHz + state.stepSize);
+            else setTunedFrequency(state.tunedFreq + state.stepSize);
         } else if (e.key === 'ArrowDown' && !inDial) {
             e.preventDefault();
-            setTunedFrequency(state.tunedFreq - state.stepSize);
+            if (source.protocol === 'ic7300') tuneIc7300FromUser(state.ic7300RadioHz - state.stepSize);
+            else setTunedFrequency(state.tunedFreq - state.stepSize);
         }
     });
 
@@ -1174,11 +1779,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!paddle) return;
         e.preventDefault();
         if (paddle === 'straight') {
-            keyer.setStraight(false);
+            txPaddle.straight = false;
             audioPlayer.setKeyerStraight(false);
+        } else if (paddle === 'dit') {
+            txPaddle.dit = false;
+            audioPlayer.setKeyerPaddle('dit', false);
         } else {
-            keyer.setPaddle(paddle, false);
-            audioPlayer.setKeyerPaddle(paddle, false);
+            txPaddle.dah = false;
+            audioPlayer.setKeyerPaddle('dah', false);
         }
         updateTrxLeds();
     });
@@ -1211,6 +1819,9 @@ document.addEventListener('DOMContentLoaded', () => {
         ['agcSpeed', 'agc-select', 'change'],
         ['filterKernel', 'kernel-select', 'change'],
         ['wpm', 'wpm-slider', 'input'],
+        ['autonotchDepth', 'autonotch-depth-slider', 'input'],
+        ['nrStrength', 'nr-strength-slider', 'input'],
+        ['squelchMargin', 'squelch-thr-slider', 'input'],
     ];
 
     function saveSettings() {
@@ -1218,6 +1829,9 @@ document.addEventListener('DOMContentLoaded', () => {
         for (const [key] of SETTINGS) out[key] = state[key];
         out.filterEnabled = state.filterEnabled;
         out.qrssEnabled = state.qrssEnabled;
+        out.autonotchEnabled = state.autonotchEnabled;
+        out.nrEnabled = state.nrEnabled;
+        out.squelchEnabled = state.squelchEnabled;
         out.iambicMode = state.iambicMode;
         out.selectedSourceId = state.selectedSourceId;
         const kiwiUrlEl = document.getElementById('kiwi-url');
@@ -1226,6 +1840,22 @@ document.addEventListener('DOMContentLoaded', () => {
         if (soundDev && soundDev.value) out.soundDeviceId = soundDev.value;
         const swapEl = document.getElementById('sound-iq-swap');
         if (swapEl) out.iqSwap = !!swapEl.checked;
+        const icDev = document.getElementById('ic7300-device');
+        if (icDev && icDev.value) out.ic7300DeviceId = icDev.value;
+        const icBaud = document.getElementById('ic7300-baud');
+        if (icBaud) out.ic7300Baud = icBaud.value;
+        const icWiring = document.getElementById('ic7300-wiring');
+        if (icWiring) out.ic7300Wiring = icWiring.value;
+        const rtlMode = document.getElementById('rtlsdr-mode');
+        if (rtlMode) out.rtlMode = rtlMode.value;
+        const rtlGain = document.getElementById('rtlsdr-gain');
+        if (rtlGain) out.rtlGain = rtlGain.value;
+        const rtlPpm = document.getElementById('rtlsdr-ppm');
+        if (rtlPpm) out.rtlPpm = rtlPpm.value;
+        const rtlUp = document.getElementById('rtlsdr-upconverter');
+        if (rtlUp) out.rtlUpconverter = rtlUp.value;
+        const rtlBias = document.getElementById('rtlsdr-bias');
+        if (rtlBias) out.rtlBias = !!rtlBias.checked;
         try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(out)); } catch (e) { /* storage unavailable */ }
     }
 
@@ -1243,6 +1873,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (saved.filterEnabled !== undefined && saved.filterEnabled !== state.filterEnabled) cwFilterToggle.click();
         if (saved.qrssEnabled !== undefined && saved.qrssEnabled !== state.qrssEnabled) setQrssEnabled(!!saved.qrssEnabled);
+        if (saved.autonotchEnabled !== undefined && saved.autonotchEnabled !== state.autonotchEnabled) {
+            setAutonotchEnabled(!!saved.autonotchEnabled);
+        }
+        if (saved.nrEnabled !== undefined && saved.nrEnabled !== state.nrEnabled) setNrEnabled(!!saved.nrEnabled);
+        if (saved.squelchEnabled !== undefined && saved.squelchEnabled !== state.squelchEnabled) {
+            setSquelchEnabled(!!saved.squelchEnabled);
+        }
         if (saved.iambicMode === 'A' || saved.iambicMode === 'B') {
             const el = document.querySelector(`input[name="iambic-mode"][value="${saved.iambicMode}"]`);
             if (el) {
@@ -1251,7 +1888,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
         if (saved.selectedSourceId) {
-            const el = document.querySelector(`input[name="iq-source"][value="${saved.selectedSourceId}"]`);
+            const sourceId = saved.selectedSourceId === 'f4kiy' ? 'oh5ae' : saved.selectedSourceId;
+            const el = document.querySelector(`input[name="iq-source"][value="${sourceId}"]`);
             if (el) el.checked = true;
         }
         if (saved.kiwiUrl) {
@@ -1268,6 +1906,42 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (saved.iqSwap) {
             const el = document.getElementById('sound-iq-swap');
+            if (el) el.checked = true;
+        }
+        if (saved.ic7300Baud) {
+            const el = document.getElementById('ic7300-baud');
+            if (el) el.value = String(saved.ic7300Baud);
+        }
+        if (saved.ic7300Wiring === 'ptt-dtr' || saved.ic7300Wiring === 'ptt-rts') {
+            const el = document.getElementById('ic7300-wiring');
+            if (el) el.value = saved.ic7300Wiring;
+        }
+        if (saved.ic7300DeviceId) {
+            const el = document.getElementById('ic7300-device');
+            if (el) {
+                const opt = new Option('Saved device', saved.ic7300DeviceId);
+                el.appendChild(opt);
+                el.value = saved.ic7300DeviceId;
+            }
+        }
+        if (saved.rtlMode) {
+            const el = document.getElementById('rtlsdr-mode');
+            if (el) el.value = saved.rtlMode;
+        }
+        if (saved.rtlGain != null) {
+            const el = document.getElementById('rtlsdr-gain');
+            if (el) el.value = String(saved.rtlGain);
+        }
+        if (saved.rtlPpm != null) {
+            const el = document.getElementById('rtlsdr-ppm');
+            if (el) el.value = String(saved.rtlPpm);
+        }
+        if (saved.rtlUpconverter != null) {
+            const el = document.getElementById('rtlsdr-upconverter');
+            if (el) el.value = String(saved.rtlUpconverter);
+        }
+        if (saved.rtlBias) {
+            const el = document.getElementById('rtlsdr-bias');
             if (el) el.checked = true;
         }
     }
@@ -1304,7 +1978,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (kiwiCard) {
             kiwiCard.addEventListener('click', (e) => {
                 if (e.target === kiwiUrlEl || e.target === kiwiConnectBtn || (kiwiConnectBtn && kiwiConnectBtn.contains(e.target))) return;
-                const radio = document.querySelector('input[name="iq-source"][value="f4kiy"]');
+                const radio = document.querySelector('input[name="iq-source"][value="oh5ae"]');
                 if (radio && !radio.checked) {
                     radio.checked = true;
                     radio.dispatchEvent(new Event('change', { bubbles: true }));
@@ -1365,6 +2039,131 @@ document.addEventListener('DOMContentLoaded', () => {
             ensureSound().setSwap(soundIqSwap.checked);
         });
     }
+
+    const ic7300EnableBtn = document.getElementById('ic7300-enable-btn');
+    const ic7300DeviceSel = document.getElementById('ic7300-device');
+    const ic7300BaudSel = document.getElementById('ic7300-baud');
+    const ic7300WiringSel = document.getElementById('ic7300-wiring');
+    const ic7300SerialBtn = document.getElementById('ic7300-serial-btn');
+    const ic7300Card = document.querySelector('.source-option-ic7300');
+    if (ic7300Card) {
+        ic7300Card.addEventListener('click', (e) => {
+            if (e.target === ic7300EnableBtn || (ic7300EnableBtn && ic7300EnableBtn.contains(e.target))) return;
+            if (e.target === ic7300SerialBtn || (ic7300SerialBtn && ic7300SerialBtn.contains(e.target))) return;
+            if (e.target === ic7300DeviceSel || e.target === ic7300BaudSel || e.target === ic7300WiringSel) return;
+            const radio = document.querySelector('input[name="iq-source"][value="ic7300"]');
+            if (radio && !radio.checked) {
+                radio.checked = true;
+                radio.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        });
+    }
+    if (ic7300EnableBtn) {
+        ic7300EnableBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const radio = document.querySelector('input[name="iq-source"][value="ic7300"]');
+            if (radio && !radio.checked) {
+                radio.checked = true;
+                radio.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            ensureIc7300().enable().then((ok) => {
+                if (!ok || source.protocol !== 'ic7300' || !state.running) return;
+                const sel = document.getElementById('ic7300-device');
+                if (sel && sel.value) ensureIc7300().start(sel.value);
+            });
+        });
+    }
+    if (ic7300DeviceSel) {
+        ic7300DeviceSel.addEventListener('change', () => {
+            const opt = ic7300DeviceSel.selectedOptions[0];
+            ic7300DeviceSel.classList.toggle('has-unsupported', !!(opt && opt.disabled));
+            if (source.protocol !== 'ic7300' || !state.running) return;
+            if (!ic7300DeviceSel.value) return;
+            ensureIc7300().start(ic7300DeviceSel.value);
+        });
+    }
+    if (ic7300BaudSel) {
+        ic7300BaudSel.addEventListener('change', () => {
+            ensureIc7300().setBaud(parseInt(ic7300BaudSel.value, 10));
+        });
+    }
+    if (ic7300WiringSel) {
+        ic7300WiringSel.addEventListener('change', () => {
+            syncIc7300Key();
+        });
+    }
+    if (ic7300SerialBtn) {
+        ic7300SerialBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const rig = ensureIc7300();
+            if (ic7300BaudSel) rig.cat.baud = parseInt(ic7300BaudSel.value, 10) || CIV_BAUD_DEFAULT;
+            if (rig.cat.connected) {
+                rig.disconnectSerial();
+                return;
+            }
+            rig.connectSerial();
+        });
+    }
+
+    const rtlConnectBtn = document.getElementById('rtlsdr-connect-btn');
+    const rtlModeSel = document.getElementById('rtlsdr-mode');
+    const rtlGainSel = document.getElementById('rtlsdr-gain');
+    const rtlPpmInput = document.getElementById('rtlsdr-ppm');
+    const rtlUpInput = document.getElementById('rtlsdr-upconverter');
+    const rtlBiasInput = document.getElementById('rtlsdr-bias');
+    const rtlCard = document.querySelector('.source-option-rtlsdr');
+    if (rtlConnectBtn && typeof navigator !== 'undefined' && navigator.usb) {
+        rtlConnectBtn.disabled = false;
+        rtlConnectBtn.title = 'Open the RTL-SDR over WebUSB';
+    }
+    if (rtlCard) {
+        rtlCard.addEventListener('click', (e) => {
+            if (e.target === rtlConnectBtn || (rtlConnectBtn && rtlConnectBtn.contains(e.target))) return;
+            if (e.target === rtlModeSel || e.target === rtlGainSel || e.target === rtlPpmInput
+                || e.target === rtlUpInput || e.target === rtlBiasInput) return;
+            const radio = document.querySelector('input[name="iq-source"][value="rtlsdr"]');
+            if (radio && !radio.checked) {
+                radio.checked = true;
+                radio.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        });
+    }
+    function pushRtlControls() {
+        if (!rtl) return;
+        applyRtlControls(rtl);
+        if (source.protocol === 'rtlsdr') updateSourceStatus();
+    }
+    if (rtlConnectBtn) {
+        rtlConnectBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const radio = document.querySelector('input[name="iq-source"][value="rtlsdr"]');
+            const switching = radio && !radio.checked;
+            if (switching) {
+                radio.checked = true;
+                radio.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            const rig = ensureRtl();
+            applyRtlControls(rig);
+            if (rig.connected) {
+                rig.close();
+                return;
+            }
+            if (switching && state.running) return;
+            if (state.running) rig.start();
+            else rig.prepare();
+        });
+    }
+    if (rtlModeSel) rtlModeSel.addEventListener('change', pushRtlControls);
+    if (rtlGainSel) rtlGainSel.addEventListener('change', pushRtlControls);
+    if (rtlPpmInput) rtlPpmInput.addEventListener('change', pushRtlControls);
+    if (rtlUpInput) rtlUpInput.addEventListener('change', pushRtlControls);
+    if (rtlBiasInput) rtlBiasInput.addEventListener('change', pushRtlControls);
+
+    document.addEventListener('visibilitychange', () => syncIc7300Key());
+    window.addEventListener('pagehide', () => { if (ic7300) ic7300.releaseKey(); });
 
     const checked = document.querySelector('input[name="iq-source"]:checked');
     const startId = (checked && checked.value) || 'va2gka';

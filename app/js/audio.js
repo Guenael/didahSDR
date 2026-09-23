@@ -17,8 +17,7 @@ class WebAudioPlayer {
 
         this.volume = 0.8;
         this.muted = false;
-        this.INPUT_RATE = 48000;     // demodulator output rate; the context is asked for the same rate
-        this.WORKLET_V = '2';        // cache-bust Firefox's AudioWorklet module map
+        this.INPUT_RATE = 48000;     // demodulator output rate; the AudioContext stays at 48 kHz
 
         this.onStateChange = null;
         this.onLevel = null;
@@ -42,7 +41,7 @@ class WebAudioPlayer {
             return this.initPromise;
         }
         try {
-            this.ctx = new AudioCtx({ sampleRate: this.INPUT_RATE, latencyHint: 'interactive' });
+            this.ctx = new AudioCtx({ sampleRate: 48000, latencyHint: 'interactive' });
         } catch (e) {
             try {
                 this.ctx = new AudioCtx({ latencyHint: 'interactive' });
@@ -63,11 +62,27 @@ class WebAudioPlayer {
 
         this.ctx.onstatechange = () => this.emitState();
 
-        this.initPromise = this.ctx.audioWorklet.addModule(`js/cw_keyer.js?v=${this.WORKLET_V}`)
-            .then(() => this.ctx.audioWorklet.addModule(`js/audio_worklet.js?v=${this.WORKLET_V}`))
+        this.initPromise = this.ctx.audioWorklet.addModule('js/audio_ring.js')
+            .then(() => this.ctx.audioWorklet.addModule('js/resampler.js'))
+            .then(() => this.ctx.audioWorklet.addModule('js/cw_keyer.js'))
+            .then(() => this.ctx.audioWorklet.addModule('js/audio_worklet.js'))
             .then(() => {
-                this.node = new AudioWorkletNode(this.ctx, 'didah-audio', { numberOfInputs: 0, outputChannelCount: [1] });
+                this.node = new AudioWorkletNode(this.ctx, 'didah-audio', {
+                    numberOfInputs: 0,
+                    outputChannelCount: [1],
+                    processorOptions: { inputRate: this.INPUT_RATE }
+                });
                 this.node.port.onmessage = (e) => this.handleWorkletMessage(e.data);
+                this._sab = null;
+                const isolated = typeof crossOriginIsolated === 'undefined' || crossOriginIsolated;
+                if (isolated && typeof SharedArrayBuffer !== 'undefined' && typeof createSabRing === 'function') {
+                    try {
+                        this._sab = createSabRing();
+                        this.node.port.postMessage({ type: 'sab', sab: this._sab.sab });
+                    } catch (e) {
+                        this._sab = null;
+                    }
+                }
                 this.node.connect(this.gainNode);
                 if (this.debug) this.node.port.postMessage({ type: 'debug', on: true });
                 this.ready = true;
@@ -148,6 +163,10 @@ class WebAudioPlayer {
         if (!this.initPromise) this.init();
         if (!this.ready || !this.ctx || this.ctx.state !== 'running') return;
         if (floatArray.length === 0) return;
+        if (this._sab) {
+            sabWrite(this._sab, floatArray);
+            return;
+        }
         const copy = new Float32Array(floatArray);
         this.node.port.postMessage(copy, [copy.buffer]);
     }

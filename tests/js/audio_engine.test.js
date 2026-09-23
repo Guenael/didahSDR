@@ -36,10 +36,29 @@ test('running dry counts one underrun and fades out instead of clicking', () => 
 test('drift compensation pulls the buffer level toward the target', () => {
     const e = new DidahAudioEngine(48000, 48000);
     const out = new Float32Array(128);
-    e.push(tone(e.targetBuffer + 3000));          // start 3000 samples over target
-    // Feed exactly real-time: 128 in per 128 out, so only the rate trim can move the level
+    e.push(tone(e.targetBuffer + 3000));          // start 3000 samples over target, under the 2× resync
+    const start = e.buffered;
+    // Real-time feed. The trim is clamped at ±0.1 %, so ten seconds only walks the level a little.
     for (let i = 0; i < 4000; i++) { e.push(tone(128)); e.render(out); }
-    assert.ok(Math.abs(e.buffered - e.targetBuffer) < 3000 * 0.7, `buffered ${e.buffered}, target ${e.targetBuffer}`);
+    assert.ok(e.buffered < start - 40, `buffered ${e.buffered} should fall from ${start}`);
+    assert.ok(e.buffered > e.targetBuffer, `buffered ${e.buffered} should stay above the target while catching up`);
+});
+
+test('a buffer past twice the target resyncs, and overflow keeps the newest window', () => {
+    const e = new DidahAudioEngine(12000, 48000);
+    const out = new Float32Array(128);
+    e.push(tone(e.minPrebuffer, 700, 12000));
+    e.render(out);
+    e.push(tone(e.targetBuffer * 3, 700, 12000));
+    e.render(out);
+    assert.ok(e.buffered <= e.targetBuffer + 64, `resync buffered ${e.buffered}, target ${e.targetBuffer}`);
+
+    const full = new DidahAudioEngine(48000, 48000);
+    full.push(tone(full.RING_SIZE + 1000));
+    assert.equal(full.stats.overflows, 1);
+    assert.equal(full.buffered, full.targetBuffer);
+    const behind = (full.writePos - full.readPos + full.RING_SIZE) % full.RING_SIZE;
+    assert.ok(Math.abs(behind - full.targetBuffer) < 1, `read is ${behind} behind write`);
 });
 
 test('resamples when the context rate differs from the input rate', () => {
@@ -60,6 +79,33 @@ test('reset drops everything and returns to prebuffering', () => {
     assert.equal(peakAbs(Object.assign(new Float32Array(128), {})), 0);
 });
 
+test('polyphase upsample keeps the 11 kHz image well below a 1 kHz tone', () => {
+    const e = new DidahAudioEngine(12000, 48000);
+    const out = new Float32Array(16384);
+    const block = new Float32Array(512);
+    const hop = block.length * e.inputRate / e.outputRate;
+    const src = tone(e.minPrebuffer + hop * (out.length / block.length) + 64, 1000, 12000, 0.5);
+    let pos = 0;
+    const feed = (n) => { e.push(src.subarray(pos, pos + n)); pos += n; };
+    feed(e.minPrebuffer);
+    for (let filled = 0; filled < out.length; filled += block.length) {
+        feed(hop);
+        e.render(block);
+        out.set(block, filled);
+    }
+    const fftSize = 8192;
+    const fft = new DidahFFT(fftSize);
+    const re = new Float32Array(fftSize);
+    re.set(out.subarray(out.length - fftSize));
+    const spec = fft.computeSpectrumDb(re, new Float32Array(fftSize));
+    const bin = (hz) => {
+        const k = fftSize / 2 + Math.round((hz / 48000) * fftSize);
+        return Math.max(spec[k - 1], spec[k], spec[k + 1]);
+    };
+    const gap = bin(1000) - bin(11000);
+    assert.ok(gap > 30, `1 kHz is ${gap.toFixed(1)} dB above the 11 kHz image`);
+});
+
 test('setInputRate(12000) resamples toward the context rate and resets the ring', () => {
     const e = new DidahAudioEngine(48000, 48000);
     e.push(tone(8000));
@@ -68,7 +114,7 @@ test('setInputRate(12000) resamples toward the context rate and resets the ring'
     assert.equal(e.buffered, 0);
     assert.equal(e.prebuffering, true);
     const out = new Float32Array(480);        // 10 ms of 48 kHz output
-    e.push(tone(e.minPrebuffer + 2400, 1000, 12000));
+    e.push(tone(e.minPrebuffer + 400, 1000, 12000));
     const before = e.buffered;
     e.render(out);
     assert.ok(Math.abs((before - e.buffered) - 120) < 8, `consumed ${before - e.buffered}, expected ~120 input samples`);
