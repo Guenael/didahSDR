@@ -161,7 +161,7 @@
                     </div>
                     <div class="control-group slider-container" id="cw-bw-container">
                         <label for="cw-bw-slider">CW BW:</label>
-                        <input id="cw-bw-slider" type="range" min="50" max="350" step="10" value="150">
+                        <input id="cw-bw-slider" type="range" min="50" max="500" step="10" value="150">
                         <span id="cw-bw-val" class="slider-val">150 Hz</span>
                     </div>
                     <div class="control-group" id="iambic-container">
@@ -394,12 +394,32 @@
             </div>
         </div>
 
+        <!-- VFO MEMORIES (recall / store dial frequencies) -->
+        <div id="vfo-mem-window" class="smeter-window vfo-mem-window" style="display: none;">
+            <div id="vfo-mem-header" class="smeter-header">
+                <div class="smeter-title">
+                    <span class="smeter-drag-icon">⋮⋮</span>
+                    <span>VFO MEMORIES</span>
+                </div>
+                <button id="vfo-mem-close-btn" class="smeter-close-btn" title="Close VFO memories">✕</button>
+            </div>
+            <div class="smeter-body vfo-mem-body">
+                <div id="vfo-mem-dial" class="vfo-mem-dial">Dial —</div>
+                <div id="vfo-mem-list" class="vfo-mem-list"></div>
+                <div class="vfo-mem-footer">
+                    <button type="button" id="vfo-mem-add" class="vfo-mem-add" title="Store the dial frequency as a new row">Add</button>
+                    <button type="button" id="vfo-mem-defaults" class="vfo-mem-add" title="Restore the ARRL Morse practice frequencies">ARRL</button>
+                </div>
+                <div class="vfo-mem-hint">Click tunes the VFO. STO saves the dial.</div>
+            </div>
+        </div>
+
         <!-- 3. BOTTOM PANEL: CONTROLS & INFORMATION -->
         <footer id="bottom-panel">
             <div class="control-row control-row-main">
                 <div class="control-cluster control-left">
                     <div class="control-group">
-                        <span class="group-label">VFO:</span>
+                        <button type="button" id="vfo-mem-btn" class="group-label vfo-mem-btn" title="VFO memories">VFO:</button>
                         <div id="freq-dial-container"></div>
                     </div>
                     <div class="control-group">
@@ -514,6 +534,7 @@
                         <li><strong>Hover + Mouse Wheel:</strong> Roll any individual digit drum up or down.</li>
                         <li><strong>Left Click on a digit:</strong> Selects the digit cursor. Use <code>Arrow Up/Down</code> to spin the drum or type digits <code>0-9</code>.</li>
                         <li><strong>Right Click on a digit:</strong> Zeroes out all digits to the right (convenient rounding tool).</li>
+                        <li><strong>VFO: button:</strong> Opens the memory list. Click a frequency to recall it. <strong>STO</strong> writes the dial into that row. <strong>Add</strong> appends the dial (up to 24). <strong>ARRL</strong> restores the Morse practice frequencies.</li>
                     </ul>
                 </section>
 
@@ -546,6 +567,7 @@
     <script src="js/demodulator.js"></script>
     <script src="js/qrss.js"></script>
     <script src="js/floating_window.js"></script>
+    <script src="js/vfo_memories.js"></script>
     <script src="js/value_dial.js"></script>
     <script src="js/waterfall.js"></script>
     <script src="js/audio.js"></script>

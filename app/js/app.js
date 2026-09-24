@@ -11,7 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
         sampleRate: 96000,
         tunedFreq: 14050800,
         modulation: 'cw',
-        cwBandwidth: 150,     // 50 to 350 Hz
+        cwBandwidth: 150,     // 50 to 500 Hz
         cwOffset: 700,        // 400 to 1000 Hz dedicated tone offset (default 700 Hz)
         lowCut: -75,          // Symmetrical around carrier for CW
         highCut: 75,
@@ -212,6 +212,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const smeter = new DidahSMeter();
     smeter.init();
     smeter.setModeInfo(state.modulation, state.cwBandwidth);
+    let vfoMemories = null;
 
     // 8. IQ transports: local didah /ws (replay) or a direct KiwiSDR SND socket
     const fpsBadge = document.getElementById('fps-badge');
@@ -703,6 +704,7 @@ document.addEventListener('DOMContentLoaded', () => {
         applyIc7300View();
         updateTopBarInfo();
         updateSourceStatus();
+        if (vfoMemories) vfoMemories.syncDial(currentDialHz());
     }
 
     function ensureIc7300() {
@@ -866,7 +868,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (state.modulation === 'cw') {
             const el = document.getElementById('cw-bw-slider');
             if (!el) return;
-            const next = Math.max(50, Math.min(350, state.cwBandwidth + direction * 10));
+            const next = Math.max(50, Math.min(500, state.cwBandwidth + direction * 10));
             if (next === state.cwBandwidth) return;
             el.value = String(next);
             el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -927,6 +929,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 300);
     }
 
+    function currentDialHz() {
+        if (source.protocol === 'ic7300' && state.ic7300RadioHz > 0) return state.ic7300RadioHz;
+        return state.tunedFreq;
+    }
+
     function setTunedFrequency(freq, updateDial = true, fromUser = true) {
         if (fromUser && source.protocol === 'ic7300') return;
         const prevTuned = state.tunedFreq;
@@ -976,6 +983,7 @@ document.addEventListener('DOMContentLoaded', () => {
             waterfall.clear();
         }
         sendDspControl();
+        if (vfoMemories) vfoMemories.syncDial(currentDialHz());
     }
 
     // dspcontrol is informational for the test server; coalesce mouse-rate tuning into one send per
@@ -1305,6 +1313,24 @@ document.addEventListener('DOMContentLoaded', () => {
         toggleBtnId: 'wconfig-btn', storageKey: 'didah_wconfig', defaultVisible: false,
         defaultPos: { top: '58px', left: 'auto', right: '20px' }
     });
+
+    setupFloatingWindow({
+        windowId: 'vfo-mem-window', headerId: 'vfo-mem-header', closeBtnId: 'vfo-mem-close-btn',
+        toggleBtnId: 'vfo-mem-btn', storageKey: 'didah_vfo_mem_win', defaultVisible: false,
+        defaultPos: { top: 'auto', bottom: '118px', left: '16px', right: 'auto' }
+    });
+    vfoMemories = setupVfoMemories({
+        listId: 'vfo-mem-list',
+        addBtnId: 'vfo-mem-add',
+        defaultsBtnId: 'vfo-mem-defaults',
+        dialId: 'vfo-mem-dial',
+        getDialHz: currentDialHz,
+        onRecall: (hz) => {
+            if (source.protocol === 'ic7300') tuneIc7300FromUser(hz);
+            else setTunedFrequency(hz, true, true);
+        }
+    });
+    if (vfoMemories) vfoMemories.syncDial(currentDialHz());
 
     setupFloatingWindow({
         windowId: 'source-window', headerId: 'source-header', closeBtnId: 'source-close-btn',
