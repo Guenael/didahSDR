@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>didahSDR — Software Defined Radio for CW operators — v0.8.2</title>
+    <title>didahSDR — Software Defined Radio for CW operators — v0.8.3</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="css/dial.css">
     <link rel="stylesheet" href="css/style.css">
@@ -15,7 +15,7 @@
             <div class="top-bar-left">
                 <!-- Power button with I/O symbol -->
                 <button id="power-btn" class="power-btn active" title="Toggle Power / Waterfall / Audio" aria-label="Power">⏻</button>
-                <h1 class="app-title"><span class="title-di">di</span><span class="title-dah">dah</span><span class="title-sdr">SDR</span><span class="title-tagline"> — Software Defined Radio for CW operators — v0.8.2</span></h1>
+                <h1 class="app-title"><span class="title-di">di</span><span class="title-dah">dah</span><span class="title-sdr">SDR</span><span class="title-tagline"> — Software Defined Radio for CW operators — v0.8.3</span></h1>
 
                 <!-- RX / TX Buttons -->
                 <div class="trx-group">
@@ -190,12 +190,12 @@
                 <div class="wconfig-section" id="audio-fx-section">
                     <div class="wconfig-section-title">AUDIO</div>
                     <div class="control-group fx-row">
-                        <button id="autonotch-toggle" class="toggle-btn" title="Cancel steady heterodynes and carriers in the passband">Autonotch: OFF</button>
+                        <button id="autonotch-toggle" class="toggle-btn" title="Cancel steady heterodynes and carriers in the USB/LSB passband (off in CW)">Autonotch: OFF</button>
                         <input id="autonotch-depth-slider" type="range" min="25" max="100" step="5" value="70" autocomplete="off" aria-label="Autonotch depth">
                         <span id="autonotch-depth-val" class="slider-val">70%</span>
                     </div>
                     <div class="control-group fx-row">
-                        <button id="nr-toggle" class="toggle-btn" title="LMS noise reduction: keep correlated CW/SSB, reject hiss">Noise Reduction: OFF</button>
+                        <button id="nr-toggle" class="toggle-btn" title="LMS noise reduction for USB/LSB: keep the voice, reject hiss (off in CW)">Noise Reduction: OFF</button>
                         <input id="nr-strength-slider" type="range" min="25" max="100" step="5" value="50" autocomplete="off" aria-label="Noise reduction strength">
                         <span id="nr-strength-val" class="slider-val">50%</span>
                     </div>
@@ -588,6 +588,13 @@
     <script src="js/ic7300.js"></script>
     <script src="js/rtlsdr.js"></script>
     <script src="js/cw_keyer.js"></script>
+    <script src="js/spectrum_pipeline.js"></script>
+    <script src="js/tuning.js"></script>
+    <script src="js/source_manager.js"></script>
+    <script src="js/ic7300_controller.js"></script>
+    <script src="js/tx_controller.js"></script>
+    <script src="js/settings_store.js"></script>
+    <script src="js/ui_bindings.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

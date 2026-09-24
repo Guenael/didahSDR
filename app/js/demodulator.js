@@ -10,7 +10,8 @@
  *                 340 Hz transition at −60 dB (about 129 taps at 12 kHz), so the
  *                 selectivity does not depend on the source rate. This is the sideband selection.
  *   4. BFO      : phasor rotate by +pitch (CW) or the SSB passband centre, then Re().
- *   5. Autonotch / NR (optional, real audio, in place). The autonotch is not applied in CW.
+ *   5. Autonotch / NR (optional, real audio, in place). SSB only: in a CW channel the noise is as
+ *      predictable as the tone, so NR cannot tell them apart, and a CW dit is a tone the notch would dig out.
  *   6. AGC (in place). Reset when the tune jumps by more than LARGE_RETUNE_HZ.
  *   7. Squelch gate (optional; power is measured on the pre-AGC buffer).
  *   A tap on the stage-3 output (complex, pre-BFO, pre-AGC) feeds the CW decoder.
@@ -274,7 +275,7 @@ class DidahDemodulator {
         const prevMod = this.modulation;
         if (p.offsetFreq !== undefined) this.offsetFreq = p.offsetFreq;
         if (p.modulation !== undefined) this.modulation = p.modulation.toLowerCase();
-        if (p.cwBandwidth !== undefined) this.cwBandwidth = Math.max(30, Math.min(500, p.cwBandwidth));
+        if (p.cwBandwidth !== undefined) this.cwBandwidth = Math.max(CW_BW_MIN, Math.min(CW_BW_MAX, p.cwBandwidth));
         if (p.bfoPitch !== undefined) this.bfoPitch = Math.max(300, Math.min(1200, p.bfoPitch));
         this.updateFilters();
         this.squelch.setHangForMode(this.modulation);
@@ -304,7 +305,7 @@ class DidahDemodulator {
     }
 
     setCwBandwidth(bw) {
-        this.cwBandwidth = Math.max(30, Math.min(500, bw));
+        this.cwBandwidth = Math.max(CW_BW_MIN, Math.min(CW_BW_MAX, bw));
         this.updateFilters();
         this._resetAudioFx();
     }
@@ -441,9 +442,11 @@ class DidahDemodulator {
         this.bfoS = bfoS;
 
         if (this.tapCallback) this.tapCallback(tapI, tapQ, o);
-        // A CW dit is a tone the autonotch would dig out. SSB carriers are the target.
-        if (this.modulation !== 'cw' && this.autoNotch.enabled) this.autoNotch.process(out, o);
-        if (this.nr.enabled) this.nr.process(out, o);
+        // SSB only (see the header): in CW the autonotch digs out dits and NR lifts the channel noise.
+        if (this.modulation !== 'cw') {
+            if (this.autoNotch.enabled) this.autoNotch.process(out, o);
+            if (this.nr.enabled) this.nr.process(out, o);
+        }
         this.squelch.observe(out, o, this.agc.noiseFloor);
         this.agc.process(out.subarray(0, o));
         this.squelch.gate(out, o);

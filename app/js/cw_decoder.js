@@ -26,10 +26,6 @@ function cwTokenClass(tok) {
     return 'cwd-plain';
 }
 
-function escapeHtml(s) {
-    return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-}
-
 /**
  * Fold `chunk` onto the unfinished word. Completed words are `words` (an empty
  * string is a repeated space). `pending` is the tail that may still grow.
@@ -38,14 +34,6 @@ function cwConsumeText(pending, chunk) {
     const parts = (pending + chunk).split(' ');
     const next = parts.pop();
     return { words: parts, pending: next };
-}
-
-/** Completed words become spans; the trailing partial word stays plain (it may still grow). */
-function cwHighlightHtml(text) {
-    const parts = text.split(' ');
-    const tail = parts.pop();
-    const done = parts.map((w) => (w ? `<span class="${cwTokenClass(w)}">${escapeHtml(w)}</span>` : '')).join(' ');
-    return done + (parts.length ? ' ' : '') + `<span class="cwd-pending">${escapeHtml(tail)}</span>`;
 }
 
 class CWDecoder {
@@ -76,6 +64,22 @@ class CWDecoder {
         this.onTap = (i, q, n) => this._tap(i, q, n);
         /** CWRecorder fed with the tap at the decoder rate; any reset ends its clip. */
         this.recorder = null;
+        /**
+         * Tap samples handed to the worker since its last reset: the same clock as the positions in the
+         * worker's 'text' messages, so REC can keep only the characters inside its clip.
+         */
+        this.tapPos = 0;
+        /** Set when the model or onnxruntime files are not served (they are not in git). */
+        this.missing = '';
+    }
+
+    /** The decoder cannot run: say why instead of starting a worker that will fail. */
+    setMissing(detail) {
+        this.missing = detail || '';
+        if (this.missing) {
+            this.stop();
+            this._status('missing', this.missing);
+        }
     }
 
     /** Nearest multiple of 800 (Kiwi reports e.g. 12001.2 Hz; the 0.01 % error is irrelevant). */
@@ -96,6 +100,7 @@ class CWDecoder {
     }
 
     start(audioRate) {
+        if (this.missing) { this._status('missing', this.missing); return; }
         const plan = CWDecoder.ratePlan(audioRate);
         if (!plan.rate) { this._status('error', `unsupported rate ${audioRate}`); return; }
         this._bindResampler(audioRate, plan);
@@ -131,7 +136,8 @@ class CWDecoder {
         if (this.recorder) this.recorder.stop('decoder off');
         if (this.demod.tapCallback === this.onTap) this.demod.tapCallback = null;
         if (this.worker) this.worker.postMessage({ type: 'run', on: false });
-        this._status(this.worker ? 'standby' : 'off');
+        if (this.missing) this._status('missing', this.missing);
+        else this._status(this.worker ? 'standby' : 'off');
     }
 
     setRate(audioRate) {
@@ -154,6 +160,9 @@ class CWDecoder {
     reset() {
         if (this.recorder) this.recorder.stop('reset');
         this.fill = 0;
+        this.tapPos = 0;
+        // Chunks not yet sent belong to the old station and would land after the worker's reset.
+        while (this.hold.length) this.pool.push(this.hold.shift());
         if (this._poly) this._poly.reset();
         if (this.worker) this.worker.postMessage({ type: 'reset' });
     }
@@ -175,6 +184,7 @@ class CWDecoder {
         this.fill = 0;
         this.made = 0;
         this.inFlight = 0;
+        this.tapPos = 0;   // the worker resets its frontend on a rate change
         this.epoch++;
     }
 
@@ -189,7 +199,10 @@ class CWDecoder {
             this.made++;
             return { i: new Float32Array(this.chunkSamples), q: new Float32Array(this.chunkSamples) };
         }
-        if (this.hold.length) return this.hold.shift();
+        if (this.hold.length) {
+            this.tapPos -= this.chunkSamples;   // the worker never sees it: keep the clocks aligned
+            return this.hold.shift();
+        }
         return null;
     }
 
@@ -221,14 +234,14 @@ class CWDecoder {
             i = this._poly.outI;
             q = this._poly.outQ;
         }
-        if (this.recorder) this.recorder.pushTap(i, q, n);
+        if (this.recorder) this.recorder.pushTap(i, q, n, this.tapPos);
         let p = 0;
         const samples = this.chunkSamples;
         while (p < n) {
             if (!this.cur) {
                 this.cur = this._takeBuffer();
                 this.fill = 0;
-                if (!this.cur) return;
+                if (!this.cur) break;
             }
             const room = samples - this.fill;
             const take = room < n - p ? room : n - p;
@@ -247,6 +260,7 @@ class CWDecoder {
                 this._drain();
             }
         }
+        this.tapPos += p;
     }
 
     _onMessage(m) {
@@ -258,7 +272,7 @@ class CWDecoder {
                 this._drain();
                 break;
             case 'text':
-                if (this.recorder) this.recorder.pushText(m.text);
+                if (this.recorder) this.recorder.pushText(m.text || '', m.at, m.upTo);
                 this._appendChunk(m.text || '');
                 break;
             case 'status':
@@ -330,11 +344,11 @@ class CWDecoder {
     _status(state, detail) {
         const el = this.els.status;
         if (!el) return;
-        const label = { loading: 'LOADING', ready: 'DECODING', standby: 'STANDBY', off: 'OFF', error: 'ERROR' }[state] || state.toUpperCase();
+        const label = { loading: 'LOADING', ready: 'DECODING', standby: 'STANDBY', off: 'OFF', error: 'ERROR', missing: 'NO MODEL' }[state] || state.toUpperCase();
         el.textContent = label;
         el.className = `cwd-status cwd-status-${state}`;
         el.title = detail || '';
     }
 }
 
-if (typeof module !== 'undefined') module.exports = { CWDecoder, cwTokenClass, cwHighlightHtml, cwConsumeText, CW_HIGHLIGHT };
+if (typeof module !== 'undefined') module.exports = { CWDecoder, cwTokenClass, cwConsumeText, CW_HIGHLIGHT };

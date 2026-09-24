@@ -45,3 +45,6 @@ app/models/*
 CLAUDE.md
 .cursorrules
 .cursor/
+
+# Dev tooling (ESLint)
+node_modules/

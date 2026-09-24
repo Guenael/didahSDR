@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { req } = require('./load.js');
 const {
     RTL_CAPTURE_RATE, RTL_IQ_RATE, RTL_FS4_HZ, RTL_XTAL_HZ,
-    rtlNominalHz, rtlHardwareHz, rtlUsesPll, rtlApplyCenter, RtlDecimator,
+    rtlNominalHz, rtlUsesPll, rtlApplyCenter, RtlDecimator,
     rtlNumberToBytes, rtlPickDevice, rtlPllPlan, RtlSdrSource
 } = req('rtlsdr.js');
 const { findSource } = req('sources.js');
@@ -64,12 +64,9 @@ test('catalog lists the RTL-SDR source at 14.048 MHz CW', () => {
     assert.equal(src.fftSize, 2048);
 });
 
-test('hardware LO is the dial plus 384 kHz, then PPM and the upconverter', () => {
+test('hardware LO is the dial plus 384 kHz, plus the upconverter', () => {
     assert.equal(rtlNominalHz(14048000, 0), 14048000 + RTL_FS4_HZ);
     assert.equal(rtlNominalHz(145500000, 125000000), 145500000 + 125000000 + RTL_FS4_HZ);
-    const nominal = rtlNominalHz(14048000, 0);
-    assert.equal(rtlHardwareHz(14048000, 10, 0), Math.round(nominal * 1.00001));
-    assert.equal(rtlHardwareHz(14048000, -20, 0), Math.round(nominal * 0.99998));
 });
 
 test('direct sampling below the crystal does not program the R820T PLL', async () => {

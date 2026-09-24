@@ -45,6 +45,7 @@ class HorizontalWaterfall {
         this.maxZoom = 24.0;
         this.panOffset = 0.0; // in Hz from center
         this.viewLock = false; // IC-7300: block click-tune and zoom; Shift-pan still tunes the radio
+        this.passbandTint = true; // reversed-colormap passband; off in QRSS, where the band fills the view
 
         // Interaction state
         this.dragMode = null;         // 'tune' | 'zoom' | 'pan' | 'bw'
@@ -91,7 +92,6 @@ class HorizontalWaterfall {
         this.onTuneCallback = null;
         this.onPanCallback = null;
         this.onBandwidthCallback = null;
-        this.showPassband = true;
 
         this.initDOM();
         this.initRenderer();
@@ -416,14 +416,10 @@ class HorizontalWaterfall {
         gl.uniform1f(this.uniforms.u_freqBottom, freqBottom);
         gl.uniform1f(this.uniforms.u_freqTop, freqTop);
 
-        let pbMin = 2.0, pbMax = 2.0;
-        if (this.showPassband) {
-            const { lo, hi } = this.getPassbandEdges();
-            pbMin = (lo - fullMinFreq) / this.sampleRate;
-            pbMax = (hi - fullMinFreq) / this.sampleRate;
-        }
-        gl.uniform1f(this.uniforms.u_pbMin, pbMin);
-        gl.uniform1f(this.uniforms.u_pbMax, pbMax);
+        const { lo, hi } = this.getPassbandEdges();
+        const noTint = 2.0;   // outside [0, 1]: no texel is in the passband
+        gl.uniform1f(this.uniforms.u_pbMin, this.passbandTint ? (lo - fullMinFreq) / this.sampleRate : noTint);
+        gl.uniform1f(this.uniforms.u_pbMax, this.passbandTint ? (hi - fullMinFreq) / this.sampleRate : noTint);
 
         const edgeX = (freqTop - freqBottom) / Math.max(1.0, this.wfHeight) * 1.5;
         gl.uniform1f(this.uniforms.u_edgeX, edgeX);
@@ -506,13 +502,13 @@ class HorizontalWaterfall {
     }
 
     freqToY(freq) {
-        const { start, end, span } = this.getVisibleFreqRange();
+        const { end, span } = this.getVisibleFreqRange();
         const frac = (end - freq) / span;
         return frac * this.wfHeight;
     }
 
     yToFreq(y) {
-        const { start, end, span } = this.getVisibleFreqRange();
+        const { end, span } = this.getVisibleFreqRange();
         const frac = y / this.wfHeight;
         return end - frac * span;
     }
@@ -538,13 +534,6 @@ class HorizontalWaterfall {
             lo: this.tunedFreq + this.lowCut,
             hi: this.tunedFreq + this.highCut
         };
-    }
-
-    setShowPassband(on) {
-        const next = !!on;
-        if (next === this.showPassband) return;
-        this.showPassband = next;
-        this.refreshChrome();
     }
 
     /**
@@ -662,19 +651,17 @@ class HorizontalWaterfall {
             ctx.closePath();
             ctx.fill();
 
-            if (this.showPassband) {
-                const { lo, hi } = this.getPassbandEdges();
-                const yTop = this.freqToY(hi);
-                const yBottom = this.freqToY(lo);
-                ctx.strokeStyle = '#e5c07b';
-                ctx.lineWidth = 2.5;
-                ctx.beginPath();
-                ctx.moveTo(4, yTop);
-                ctx.lineTo(0, yTop);
-                ctx.lineTo(0, yBottom);
-                ctx.lineTo(4, yBottom);
-                ctx.stroke();
-            }
+            const { lo, hi } = this.getPassbandEdges();
+            const yTop = this.freqToY(hi);
+            const yBottom = this.freqToY(lo);
+            ctx.strokeStyle = '#e5c07b';
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.moveTo(4, yTop);
+            ctx.lineTo(0, yTop);
+            ctx.lineTo(0, yBottom);
+            ctx.lineTo(4, yBottom);
+            ctx.stroke();
         }
     }
 

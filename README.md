@@ -2,354 +2,204 @@
 
 ![didahSDR](art/logo.png)
 
-## Overview
+didahSDR is a web SDR for Morse (CW) operators. The browser does all the signal processing: FFT,
+waterfall, CW/USB/LSB demodulation, AGC, noise reduction, an S-meter and a neural CW decoder. The
+waterfall scrolls right to left with frequency on the vertical axis, so a CW signal reads like text.
 
-**didahSDR** is a high-performance, web-based Software Defined Radio (Web-SDR) interface specifically engineered for Morse code (CW) operators and radio enthusiasts. Designed with a minimalist, dependency-free vanilla HTML/JS frontend and a lightweight asynchronous Python backend, didahSDR delivers zero-latency spectrum visualization and real-time audio demodulation directly in your modern web browser.
+The client is plain HTML/CSS/JavaScript with no framework and no build step. The optional Python server
+only streams a recorded IQ file; it does no DSP.
 
-Unlike traditional Web-SDR receivers that render vertical top-to-bottom waterfalls and execute all digital signal processing (DSP) server-side, **didahSDR** features an intuitive **right-to-left horizontal waterfall** paired with a **frequency ruler** and passband highlighting. Heavy DSP workloads—including Fast Fourier Transform (FFT), audio demodulation (CW, USB, LSB), adaptive IIR filtering with spatial sharpening, and two-sided Automatic Gain Control (AGC)—are executed on the client side using Web Audio and Canvas APIs.
-
-## How to use this project
-
-- Clone this repository: `git clone https://github.com/Guenael/didahSDR.git`
-- Navigate to the project root: `cd didahSDR`
-- Set up a Python 3.10+ virtual environment and install the package with dependencies:
-  ```bash
-  python3 -m venv .venv
-  source .venv/bin/activate
-  pip install -e ".[test]"
-  ```
-- Place your 16-bit stereo IQ recording (WAV format) in the `samples/` directory or use the provided extract.
-- Launch the backend server:
-  ```bash
-  python3 server/replay_server.py --port 9000 --wav samples/SAMPLE_20120219_174346Z_14048kHz_RF.wav
-  ```
-- Open your browser and navigate to `http://localhost:9000`.
-- Click the **Power** button (top-left) to start the audio engine and stream reception.
-- Toggle between **CW**, **USB**, and **LSB** modes, adjust CW filter bandwidth, tune via mouse wheel or the analog frequency drum, and enable the **CW Filter** to enhance Morse signals.
-- To run inside a container, build with Podman or Docker:
-  ```bash
-  podman build -t didahsdr:latest .
-  podman run --rm -it -v ~/samples:/home/app/samples -p 9000:9000 localhost/didahsdr:latest
-  ```
-
-## The default application of this project
-
-The default installation includes a complete client-server simulation using a high-fidelity 96 kHz 16-bit complex IQ recording of the 20-meter amateur band (`14048 kHz` center frequency). The Python backend serves the web client assets and continuously streams raw IQ chunks over WebSocket, while client-side DSP algorithms decode spectrum and audio with zero buffering delay.
-
-URL: [http://localhost:9000](http://localhost:9000)
-
-The interface provides an interactive toolbar and controls:
-
-| Control / Component | Type | Functionality |
-|---------------------|------|---------------|
-| Power Button        | Toggle     | Activates Web Audio context, starts stream, and initiates waterfall rendering |
-| Analog Drum Dial    | Interactive Dial | Smooth mechanical frequency readout and drag-to-tune control |
-| Mode Selectors      | Buttons    | Switches demodulation between `CW`, `USB`, and `LSB` |
-| Zoom Controls       | Buttons    | `+`, `-`, `Max`, `Min` horizontal waterfall magnification |
-| Tuning Steps        | Dropdown   | Increments of 100 Hz, 500 Hz, or 1 kHz (with mouse wheel snap) |
-| Colormap Selector   | Dropdown   | Viridis, Plasma, Blues, Purples, Jet, Rainbow, Turbo, Hot, RdBu (standard & reversed) |
-| CW Filter           | Toggle     | Enables adaptive IIR noise-floor estimation and spatial sharpening |
-| CW Bandwidth Slider | Range      | Custom passband width adjustment (50 Hz to 350 Hz) |
-| Waterfall Sliders   | Range      | Adjustable Minimum Level (-100 to 0 dB) and Dynamic Range (10 to 120 dB) |
-| AGC                 | DSP Engine | Two-sided AGC (`AGC`) keeping Morse dots and dashes in range |
-
-## Features of the application
-
-- **Client-Side DSP & Zero Latency**: In-browser FFT and complex IQ demodulation via Web Audio API and TypedArrays (`Float32Array`), bypassing server round-trips.
-- **Horizontal Scrolling Waterfall**: Smooth right-to-left scrolling waterfall canvas matching Morse code reading flow.
-- **Frequency Ruler**: High-contrast frequency scale with highlighted active listening passband.
-- **CW Adaptive IIR & Spatial Sharpening Filter**: Non-linear IIR smoothing combined with 1D spatial convolution to suppress noise floors and sharpen carrier peaks without oversaturating the display.
-- **Two-Sided AGC**: VE3NEA-inspired automatic gain control preserving faint signals between strong Morse pulses without audio clipping.
-- **Mechanical Analog Drum Frequency Dial**: Retro analog tumbler dial with tactile tuning feedback.
-- **Mouse & Keyboard Shortcuts**:
-  - `Scroll`: Adjust tuned frequency by selected step.
-  - `Ctrl + Scroll`: Zoom waterfall in/out.
-  - `Drag Canvas / Ruler`: Pan across the RF spectrum.
-  - `H` or `Help Button`: Open the Quick Guide & Shortcuts modal.
-
-## Architecture
-
-The Python server does no DSP. It loops a 16-bit stereo IQ WAV and pushes raw `0x03` packets over
-WebSocket. The browser demodulates, draws the waterfall, and decodes CW.
-
-Five sources share one float contract, `onRawIQ(Float32 interleaved ±1, n)`, and one lifecycle
-(`start` / `stop` / `connected`, plus `onCenterApplied` when the radio moves the centre):
+## Sources
 
 | Source | What it is |
 | --- | --- |
-| VA2GKA Replay | This server, local WebSocket |
-| KiwiSDR | Direct SND connection, IQ mode, about 12 kHz |
-| Sound card | Stereo I/Q at 48 / 96 / 192 kHz, centre 0 Hz |
-| IC-7300 | Real 12 kHz USB IF, mixed to complex baseband, CI-V for the VFO |
-| RTL-SDR | WebUSB, decimated to 192 kHz |
+| Replay | The Python server loops a 16-bit stereo IQ WAV over a WebSocket |
+| KiwiSDR | Direct SND connection to a public KiwiSDR, IQ mode, about 12 kHz wide |
+| Sound card | Stereo I/Q (SoftRock style) at 48 / 96 / 192 kHz, centre 0 Hz |
+| IC-7300 | The radio's 12 kHz USB IF, mixed to complex baseband; CI-V (Web Serial) for the VFO and CW keying |
+| RTL-SDR | RTL2832U + R820T/R820T2 over WebUSB, decimated to 192 kHz; direct sampling for HF |
 
-Demodulation runs at one channel rate near 12 kHz (`CH_RATE` in `demodulator.js`): a phasor NCO,
-halfband decimation, then a Kaiser channel filter whose width does not depend on the source rate.
-The AGC class is `AGC` (`app/js/agc.js`). USB and LSB passbands are adjustable (`setSsbPassband` in
-`modes.js`, default 200–2700 Hz). The CW decoder worker runs a stateless fixed-length ONNX call, not
-a streaming model; the sample front end in front of that call is still incremental.
+The browser needs WebGL and AudioWorklet. The sound card and IC-7300 sources need a secure context
+(`https://` or `localhost`). Web Serial and WebUSB are Chromium-only (Chrome, Edge).
 
-```
-Browser (vanilla JS, WebGL waterfall, Web Audio)
-│
-├── IQ sources → onRawIQ(Float32 ±1)   (only the selected source)
-├── DidahDemodulator at CH_RATE ≈ 12 kHz → AGC → AudioWorklet
-├── FFT + optional CW filter → horizontal waterfall
-└── CW decoder worker (stateless ONNX)
-                               ▲
-                               │ WebSocket (/ws) raw IQ, HTTP (/)
-                               ▼
-Python backend (aiohttp, no NumPy)
-├── Static files (app/)
-├── WavIQLooper (any size WAV, ~16 MB read-ahead)
-└── WebSocket /ws  (0x03 IQ only; per-client queue)
+## Quick start
+
+```bash
+git clone https://github.com/Guenael/didahSDR.git
+cd didahSDR
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+python3 server/replay_server.py --wav /path/to/recording.wav --center-freq 14048000
 ```
 
-## Prerequisites, Technologies used & Dependencies
+Open <http://localhost:9000> and press **Power** (the browser needs a click before it plays audio).
+The Kiwi, sound-card, IC-7300 and RTL-SDR sources work without a recording: pick them in the **Source**
+window.
 
-- **Python**: 3.10, 3.11, or 3.12
-- **Backend Libraries**: `aiohttp >= 3.9.0`
-- **Testing & Tooling**: `pytest >= 8.0.0`, `pytest-asyncio >= 0.23.0`, `pytest-cov >= 4.1.0`, `ruff`, `black`
-- **Frontend**: Vanilla JavaScript (ES6+), HTML5 Canvas, Web Audio API, WebSockets (No bulky frameworks or external CDN dependencies)
-- **Containerization**: Podman or Docker (multi-stage build with non-root runtime)
+### IQ recordings
 
-## Online service provided
+No recording is shipped with the repository. The replay source needs a **16-bit stereo PCM WAV** with I on
+the left channel and Q on the right, at any sample rate (96 or 192 kHz is typical). This is what HDSDR,
+SDR# and most SDR programs write when they record the raw IQ baseband (`WAVE_FORMAT_EXTENSIBLE` headers
+are fine). Pass the recording's centre frequency with `--center-freq`: IQ files do not store it (HDSDR
+puts it in the file name, e.g. `HDSDR_20120219_174346Z_14048kHz_RF.wav`).
 
-| Endpoint | Protocol | Description |
-|----------|----------|-------------|
-| `http://localhost:9000/` | HTTP | Main Web-SDR user interface |
-| `http://localhost:9000/ws` | WebSocket | Raw 16-bit IQ (`0x03`) plus the text handshake and config JSON |
-
-## Repository Structure
-
+```bash
+python3 server/replay_server.py --wav samples/my_recording.wav --center-freq 7048000 --port 9000
 ```
-.
-├── app/                      # Web frontend (vanilla HTML/CSS/JS)
-│   ├── css/
-│   │   ├── dial.css          # Analog drum dial styling
-│   │   └── style.css         # Dark theme UI & layout
-│   ├── js/
-│   │   ├── app.js            # Main application controller
-│   │   ├── audio.js          # Web Audio Context player
-│   │   ├── colormaps.js      # Matplotlib colormap definitions
-│   │   ├── connection.js     # WebSocket connection & protocol parser
-│   │   ├── cw_filter.js      # CW adaptive IIR & spatial sharpening filter
-│   │   ├── demodulator.js    # Client-side CW/USB/LSB demodulator
-│   │   ├── fft.js            # Client-side Radix-2 FFT engine
-│   │   ├── agc.js            # Two-sided AGC (`AGC`)
-│   │   ├── value_dial.js     # Analog tumbler frequency dial
-│   │   └── waterfall.js      # Horizontal waterfall renderer & ruler
-│   └── index.html            # Single-page web application entrypoint
-├── server/                   # Standalone Python backend
-│   └── replay_server.py      # aiohttp IQ streamer and WebSocket server
-├── tests/                    # Backend unit & integration test suite
-│   ├── __init__.py
-│   └── test_server.py        # Tests for WavIQLooper, AGC, and aiohttp app
-├── docs/                     # Documentation and assets
-│   ├── image.png             # UI overview screenshot
-│   └── notes.md              # Technical specifications & design notes
-├── .github/
-│   └── workflows/
-│       └── lint.yaml         # CI: Lint, format checks, and test suite
-├── pyproject.toml            # Project packaging, dependencies, and tool settings
-├── Dockerfile                # Multi-stage container definition
-├── .dockerignore             # Excluded files for container builds
-└── README.md                 # Project documentation
-```
-
-## CI/CD Pipeline
-
-The GitHub Actions workflows run automatically:
-
-| Workflow | Trigger | Description |
-|----------|---------|-------------|
-| `lint.yaml` | pull_request, push | Ruff linting, Black formatting checks, and pytest test suite execution |
-| `build.yaml` | workflow_dispatch, release | Multi-arch container image build and publishing |
-
-## Configuration & Environment Variables
-
-The standalone server takes command-line arguments only (no environment-variable overrides):
 
 | Argument | Default | Description |
-|----------|---------|-------------|
-| `--host` | `0.0.0.0` | Bind IP address for HTTP and WebSocket |
-| `--port` | `9000` | Listening port for the web server |
-| `--wav` | `samples/SAMPLE_20120219_174346Z_14048kHz_RF.wav` | Path to a 16-bit stereo complex IQ WAV file |
-| `--center-freq` | `14048000` | Centre frequency in Hz (e.g. 14.048 MHz) |
+| --- | --- | --- |
+| `--wav` | `./samples/SAMPLE_20120219_174346Z_14048kHz_RF.wav` if present | 16-bit stereo IQ WAV, looped |
+| `--center-freq` | `14048000` | Centre frequency of the recording, Hz |
+| `--host` | `0.0.0.0` | Bind address |
+| `--port` | `9000` | HTTP and WebSocket port |
 
-Example running on a custom port and frequency:
-```bash
-python3 server/replay_server.py --port 8080 --center-freq 14070000 --wav /path/to/20m_band.wav
-```
+### CW decoder assets
 
-## Development & Manual testing/debugging
+The decoder runs a small ONNX model with onnxruntime-web in a worker. Neither is in git:
 
-1. Clone the repository and set up a virtual environment:
-   ```bash
-   git clone https://github.com/Guenael/didahSDR.git
-   cd didahSDR
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install -e ".[test]"
-   ```
-2. Start the server with the included IQ sample:
-   ```bash
-   python3 server/replay_server.py
-   ```
-3. Open your browser to `http://localhost:9000`.
-4. Inspect WebSocket messages and client DSP in browser developer tools (F12 > Console / Network > WS).
-5. Frontend changes in `app/` are served statically and reload upon browser refresh without restarting the server.
+- **onnxruntime-web**: `scripts/fetch_ort.sh` downloads the pinned version from the npm registry, checks
+  its sha512, and installs it in `app/lib/`. The container build does this for you.
+- **The model**: `app/models/didahcw.onnx` and `didahcw.onnx.json`, exported by the training repository
+  (`didahSDR-cw-training-model`, `python -m didahcw.export … --out app/models/didahcw`).
 
-## Testing
+Without them everything else works, and the decoder window shows **NO MODEL** with the reason.
 
-Backend tests use [pytest](https://docs.pytest.org/) and `pytest-asyncio` to test server streaming.
-Client DSP tests (FFT, demodulator, AGC, CW filter, audio engine, colormaps) run on Node's built-in
-test runner with no extra dependency:
+## Container
 
 ```bash
-# Client DSP tests
-node --test tests/js/
-
-# Run all backend tests
-pytest -v
-
-# Run with coverage report
-pytest --cov=server --cov-report=term-missing -v
-
-# Run specific test file
-pytest tests/test_server.py -v
+podman build -t didahsdr .
+podman run --rm -p 9000:9000 -v ./samples:/home/app/samples:ro,Z localhost/didahsdr \
+    --wav /home/app/samples/my_recording.wav --center-freq 14048000
 ```
 
-## Lint and Code Quality
+Arguments after the image name go to the server. The image runs as an unprivileged user and includes
+onnxruntime-web; `app/models/` is copied in when it exists in the build context. Docker works the same way.
+
+## Using it
+
+Mouse, on the waterfall:
+
+| Action | Effect |
+| --- | --- |
+| Click, or click and drag | Tune to that frequency |
+| Wheel | Step the VFO by the selected step |
+| Ctrl + wheel, Ctrl + drag | Zoom, centred on the cursor |
+| Shift + wheel, Shift + drag, drag on the ruler | Pan (Kiwi and RTL-SDR retune their centre; the IC-7300 retunes its VFO) |
+| Ctrl + Shift + wheel or drag | CW bandwidth, or the SSB high edge |
+
+Keyboard:
+
+| Key | Effect |
+| --- | --- |
+| Space | Power on/off |
+| M | Cycle CW → USB → LSB |
+| ↑ / ↓ | Step the VFO |
+| ← / → , Home / End | Zoom out / in, zoom min / max |
+| + / − | Change the tuning step (10 Hz to 5 kHz) |
+| Enter | Arm/disarm PTT (CW) |
+| F8 / F9 / F4 | Dit paddle / dah paddle (iambic A or B) / straight key |
+| Esc | Close the help |
+
+The frequency drum takes the wheel on each digit, digit typing after a click, and right click to zero
+the digits to its right. Settings (levels, colormap, filters, source options) are kept in the browser's
+local storage. Window positions are kept too. The **? Help** button opens the full guide.
+
+Main controls: Min level (−140 to −20 dB) and dynamic range (20 to 120 dB); waterfall speed 1–8×; FFT
+1024 / 2048 / 4096; CW filter (adaptive noise floor plus a click-sharpening kernel) for the waterfall;
+QRSS view; CW bandwidth 50–500 Hz and pitch 400–1000 Hz; SSB passband 50–4000 Hz; AGC fast/medium/slow;
+autonotch, noise reduction, squelch; CW keyer 10–40 WPM.
+
+### Transmit (CW)
+
+F8/F9/F4 and the text box key a local sidetone. With the IC-7300 source and CI-V connected, the same
+keyer drives the radio: DTR is the CW key and RTS is PTT (swappable), and typed text can go out through
+the radio's own keyer (CI-V `0x17`). Losing window focus releases the key and disarms PTT, and a key held
+down for more than 10 s is released automatically.
+
+### Recording decoder clips
+
+**REC** in the decoder window saves the decoder input with a sidecar, for labelling and model evaluation.
+See [docs/recording.md](docs/recording.md).
+
+## Architecture
+
+```
+Browser (vanilla JS, WebGL, Web Audio, Workers)
+│
+├── IQ source → onRawIQ(Float32 interleaved ±1)          (only the selected source)
+│    ├── audio: NCO → halfbands → ~12 kHz → Kaiser channel filter → BFO → [notch/NR] → AGC → AudioWorklet
+│    │            └── tap after the channel filter → CW decoder worker (front end + stateless ONNX call)
+│    └── video: ring → window → FFT → dB → [CW filter] → WebGL waterfall, S-meter
+│
+▼ WebSocket /ws: text handshake + config JSON, then 0x03 + int16 interleaved IQ every 25 ms
+Python server (aiohttp, standard library only otherwise)
+└── WavIQLooper: any-size WAV, looped with a bounded (~16 MB) threaded read-ahead
+```
+
+- Demodulation runs at one channel rate near 12 kHz (`demodulator.js`), so the selectivity does not
+  depend on the source rate. USB/LSB passbands are in `modes.js`.
+- The client scripts are plain `<script>` globals; load order is in `app/index.html`. `app.js` only
+  wires the controllers (`spectrum_pipeline.js`, `tuning.js`, `source_manager.js`, `tx_controller.js`,
+  `ic7300_controller.js`, `ui_bindings.js`, `settings_store.js`). Hot paths (`processRawIQ`, FFT, audio
+  callback, render loop) do not allocate.
+- The CW decoder front end (`cw_frontend.js`) must stay numerically identical to the training repo's
+  `didahcw/frontend.py`; `tests/js/cw_frontend.test.js` checks it against a fixture generated there.
+- Performance: `node scripts/bench.js` prints the CPU cost of the hot paths. They all stay within a few
+  percent of one core, which is why the DSP is plain JavaScript and not WebAssembly.
+
+The server's `/ws` protocol follows the OpenWebRX handshake (`SERVER DE CLIENT` / `CLIENT DE SERVER`). The
+client also sends `dspcontrol` JSON for a future live backend; the replay server ignores it.
+
+## Development
 
 ```bash
-# Check formatting with Black
-black --check server/ tests/
+source .venv/bin/activate
+pytest                                   # server tests (synthetic WAVs, no recording needed)
+ruff check server tests && black -l 120 --check server tests
 
-# Format in-place
-black server/ tests/
-
-# Lint with Ruff
-ruff check server/ tests/
-
-# Auto-fix linting issues
-ruff check --fix server/ tests/
+npm ci                                   # dev tooling only: app/ has no npm dependencies
+npm run lint                             # ESLint
+node --test tests/js/                    # client DSP, sources, keyer, decoder tests
+node scripts/bench.js                    # hot-path CPU cost
 ```
 
-CI runs these checks automatically on pull requests (`.github/workflows/lint.yaml`).
+Client changes need only a browser refresh. Add `?audiodebug` to the URL for a per-second console line of
+audio pipeline counters (underruns and overflows are cumulative since the page loaded).
 
-## Building and Testing the Docker Image locally
+CI (`.github/workflows/ci.yml`) runs the Python checks on 3.10, 3.12 and 3.13, ESLint and the Node tests,
+and builds the container and smoke-tests it with a synthetic recording.
 
-Build and run using `podman` or `docker`:
+Colormaps in `app/js/colormaps.js` are generated by `scripts/convert_palette.py`.
 
-```bash
-# Build multi-stage container image
-podman build -t didahsdr:latest .
-
-# Run container on port 9000
-podman run --rm -it -v ~/samples:/home/app/samples -p 9000:9000 localhost/didahsdr:latest
-
-/home/app/
+## Repository layout
 
 ```
+app/                 client (served statically)
+  index.html         page and script load order
+  js/                DSP, sources, UI, decoder worker, audio worklets
+  css/
+  lib/, models/      CW decoder assets (not in git, see above)
+server/              replay_server.py
+tests/               pytest (server) and tests/js (node --test)
+scripts/             fetch_ort.sh, convert_palette.py, bench.js
+docs/                recording.md, decoder-roadmap.md
+```
 
-The container runs as an unprivileged user (`app`, UID 1000) on a minimal Debian Linux base image (`python:3.12-slim`).
+## Roadmap
 
-## Security
+- CW decoder: see [docs/decoder-roadmap.md](docs/decoder-roadmap.md).
+- IQ amplitude/phase imbalance correction for sound-card IQ.
+- Mono sound-card source (a transceiver's audio output, about 4 kHz wide).
+- Touch support for the waterfall.
 
-- **Non-root Container User**: Runs under dedicated unprivileged `app` user.
-- **No External CDN Dependencies**: All JS/CSS dependencies and colormap tables are served locally from `app/` to prevent third-party tracking or supply chain tampering.
-- **Client-Side DSP Isolation**: Audio and FFT processing occur within the browser sandbox.
-- **Input Validation**: Frequency tuning and mode parameters sent via WebSocket are validated and bound to allowed RF ranges.
-
-## CW decoder: possible improvements
-
-The neural CW decoder (`app/js/cw_decoder*.js`, model trained in the sibling repo `didahSDR-cw-training-model`, design in its `TRAINING.md`) is a
-first version. Observed on real traffic with v2: recognisable contest exchanges, but a CW operator still
-decodes more than the model does. Candidate improvements, grouped by where they live.
-
-### Training data (training repo: `didahcw/synth.py`, `text.py`)
-
-- **Speed changes inside a message.** Contest operators send exchanges such as `5NN` or the serial number
-  at a different speed than the callsign. The generator keys a whole message at one WPM, so these blocks
-  decode poorly. Option: per-word speed changes drawn from a small set of ratios (e.g. 0.7 to 1.3) on a
-  fraction of messages, plus explicit "cut numbers" (`5NN`, `ENN`, `TT`). Open question whether
-  mid-message speed changes hurt convergence; test on a fine-tuning run from a converged checkpoint
-  rather than from scratch.
-- **Adjacent-signal robustness (QRM).** The generator already adds 0 to 2 other keyed stations within
-  ±350 Hz on 40 % of samples (`p_qrm`, `qrm_offset_hz`, `qrm_rel_db`). What it does not model: QRM on
-  the same frequency (a second station tail-ending or zero-beat), very strong neighbours whose key clicks
-  leak through the channel filter (heard from a 55 dB station 13 kHz away in the sample WAV), and QRM
-  density typical of a contest. Two ways to explore: raise `p_qrm`/`qrm_max` as a curriculum phase after
-  convergence, and add a same-frequency QRM mode with a small offset (0 to 30 Hz) and independent text.
-- **A real audio corpus.** All training data is synthetic. Even a few minutes of transcribed real
-  recordings in the training repo's `eval/real/` would make the CER tables honest, expose generator gaps (word gap
-  length was one), and could later be mixed into training as fine-tuning data.
-- **Word gaps.** v3 widens `word_gap_scale` down to 0.5 after seeing contest ops glue words together.
-  Compare v2 and v3 on real clips before deciding the range.
-
-### Model and decoding (training repo `didahcw/model.py`, `app/js/cw_decoder_worker.js`)
-
-- **Benchmark against DeepCW.** DeepCW publishes a CER heat map versus SNR and WPM in AWGN
-  (`tmp/web-deep-cw-decoder/README.md`): 0 % CER down to -4 dB, under 1.5 % at -8 dB, under 8 % at -10 dB,
-  with SNR referenced to a 2.5 kHz noise bandwidth and 50 % keying duty cycle. Our eval uses a 500 Hz
-  reference bandwidth, so the numbers are not comparable as printed: -10 dB in 2.5 kHz is about -3 dB in
-  500 Hz. A benchmark script should generate AWGN-only test sets on DeepCW's grid, convert the SNR
-  reference, and run both models (DeepCW via its Python example on 3.2 kHz audio) so the heat maps line
-  up. Also useful: their two YouTube-sourced clips with reference transcripts as a shared real-audio test.
-- **Words, not letters.** Operators read words. The CTC model already carries an implicit letter-level
-  language prior from the corpus mix; going further means a second stage. Cheapest first step: a
-  context-aware rescoring after the CTC output, where a recognised keyword conditions what follows
-  (`CQ`, `DE`, `TEST` are followed by a callsign; `5NN`, `PSE K`, `K`, `KN` end an exchange; `TU`
-  precedes a callsign or `73`). Concretely: keep the N-best CTC paths (beam search instead of greedy in
-  the worker) and rescore them with a small grammar or n-gram over tokens {callsign, RST, keyword,
-  number, word}. A later step is a small transformer over the CTC posteriors trained on QSO text, which
-  is what a "reads words" decoder amounts to. Both keep the streaming front end unchanged.
-- **Confidence output.** The CTC log-probs already give a per-character confidence (probability of the
-  emitted class at its peak frame, or the margin to the runner-up). Exposing it is what the GUI items
-  below need; the worker should post `{char, confidence}` instead of raw text.
-- **Speed estimate.** The CTC path gives element timing for free: the distance between consecutive
-  non-blank emissions and the blank-run lengths bound the dit length. A running estimate of WPM from the
-  shortest stable blank runs (dits and intra-character gaps) is cheap and needs no model change; a
-  dedicated regression head is the heavier alternative.
-
-### GUI (`app/js/cw_decoder.js`, `app/index.html`)
-
-- **Suppress low-confidence characters.** Below a threshold, do not display the character at all; a
-  blank is less misleading than a wrong letter. Threshold and hysteresis to be tuned on real clips.
-- **Grey out medium-confidence characters.** Between the two thresholds, show the character in dark
-  grey (`.cwd-uncertain`) so the operator knows not to trust it. The highlighter would need per-character
-  spans rather than per-word spans.
-- **Show the sending speed.** Display the running WPM estimate in the decoder window status pill
-  (e.g. `DECODING · 28 WPM`), and optionally per word when the speed changes inside an exchange.
-
-## TODOs
-
-- IQ imbalance correction (amplitude and phase) for sound-card / SoftRock stereo IQ.
-- Hardware CW transmit: COM/PTT (and a sidetone) for a standard transceiver; stereo IQ DAC output for a zero-IF radio. Local F8/F9/F4 sidetone does not leave the browser.
-- Mono sound-card AF source (commercial radio, ~4 kHz BW): audio-Hz waterfall around 0, mix the beat note to DC for the CW decoder.
-- Add WebRTC audio streaming option for ultra-low latency server-demodulated streams.
-- Implement automated Morse CW decoder (text output window) using adaptive peak detection.
-- Add WebGL acceleration option for high-resolution 4K waterfall displays.
-- Integrate RTL-SDR and HackRF direct USB drivers via WebUSB.
-
-## Versioning
-
-The `main` branch holds the latest stable code. Releases follow [Semantic Versioning](https://semver.org/).
-
-## Contributions
-
-Contributions are welcome! Please feel free to open an issue or submit a pull request.
-
-## Authors
+## Author
 
 - **Guenael** - *Initial Concept & DSP Algorithms*
 
 ## License
 
-didahSDR is free software: you can redistribute it and/or modify it under the
-terms of the GNU Affero General Public License as published by the Free Software
-Foundation, either version 3 of the License, or (at your option) any later version.
-
-See [LICENSE](LICENSE) for the full text.
-
+didahSDR is free software: you can redistribute it and/or modify it under the terms of the GNU Affero
+General Public License as published by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version. See [LICENSE](LICENSE).

@@ -1,7 +1,7 @@
 /**
  * didahSDR - Shared mode table and display constants
  *
- * Single source of truth for the demodulation passbands, consumed by app.js (UI/highlight),
+ * Single source of truth for the demodulation passbands, consumed by tuning.js (UI/highlight),
  * demodulator.js (channel filter), smeter.js (SNR window) and waterfall.js (texture range).
  * CW has no fixed passband: it is ±cwBandwidth/2 around the carrier, set at runtime.
  * USB/LSB share one audio low/high pair; LSB is the negated USB interval.
@@ -11,6 +11,10 @@ const MODES = {
     usb: { label: 'USB', low: 200,   high: 2700 },
     lsb: { label: 'LSB', low: -2700, high: -200 },
 };
+
+/** CW channel filter width, Hz (slider, wheel and demodulator share it). */
+const CW_BW_MIN = 50;
+const CW_BW_MAX = 500;
 
 const SSB_LOW_MIN = 50;
 const SSB_LOW_MAX = 1000;
@@ -42,7 +46,7 @@ function setSsbPassband(lowHz, highHz) {
 
 if (typeof module !== 'undefined') {
     module.exports = {
-        MODES, WATERFALL_DB_FLOOR, setSsbPassband,
+        MODES, WATERFALL_DB_FLOOR, setSsbPassband, CW_BW_MIN, CW_BW_MAX,
         SSB_LOW_MIN, SSB_LOW_MAX, SSB_HIGH_MIN, SSB_HIGH_MAX
     };
 }

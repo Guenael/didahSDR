@@ -111,12 +111,6 @@ function ic7300View(modeByte, iqRate, passband) {
     return { span, audioCenter: Math.round(audioCenter) };
 }
 
-function ic7300Zoom(sampleRate, maxZoom) {
-    const cap = maxZoom > 0 ? maxZoom : 24;
-    const z = (Number(sampleRate) || IC7300_OUT_RATE) / IC7300_VIEW_SPAN_HZ;
-    return Math.max(1, Math.min(cap, z));
-}
-
 /**
  * Real sample → complex baseband centred on the 12 kHz IF.
  * Halfband cascade from demodulator.js. No allocations after construction.
@@ -223,7 +217,6 @@ if (typeof globalThis !== 'undefined') {
     globalThis.ic7300Geometry = ic7300Geometry;
     globalThis.ic7300View = ic7300View;
     globalThis.didahToCivMode = didahToCivMode;
-    globalThis.ic7300Zoom = ic7300Zoom;
     globalThis.RealIfConverter = RealIfConverter;
 }
 if (typeof module !== 'undefined') {
@@ -231,6 +224,6 @@ if (typeof module !== 'undefined') {
         IC7300_NATIVE_RATE, IC7300_IF_HZ, IC7300_CW_TRACE_HZ, IC7300_CW_PITCH_HZ, IC7300_OUT_RATE,
         IC7300_VIEW_SPAN_HZ, IC7300_SSB_SPAN_HZ,
         mapCivMode, didahToCivMode, ic7300DecimPlan, ic7300IqScale, ic7300Geometry, ic7300View,
-        ic7300Zoom, RealIfConverter
+        RealIfConverter
     };
 }

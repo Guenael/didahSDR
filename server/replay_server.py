@@ -19,7 +19,7 @@ import collections
 import json
 import logging
 import os
-import wave
+import sys
 from pathlib import Path
 
 import aiohttp
@@ -27,6 +27,12 @@ from aiohttp import web
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("didahSDR-Server")
+
+SERVER_VERSION = "0.1.0"  # keep in step with pyproject.toml
+
+
+WAVE_FORMAT_PCM = 0x0001
+WAVE_FORMAT_EXTENSIBLE = 0xFFFE
 
 
 class WavIQLooper:
@@ -48,26 +54,31 @@ class WavIQLooper:
         self.block_bytes = block_bytes
         self.prefetch_blocks = prefetch_blocks
 
-        with wave.open(wav_path, "rb") as w:
-            self.channels = w.getnchannels()
-            self.sampwidth = w.getsampwidth()
-            self.framerate = w.getframerate()
-            self.nframes = w.getnframes()
-        if self.channels != 2 or self.sampwidth != 2:
+        fmt, self.data_offset, self.data_bytes = self._parse_riff(wav_path)
+        self.channels = fmt["channels"]
+        self.sampwidth = fmt["bits"] // 8
+        self.framerate = fmt["rate"]
+        if fmt["format"] != WAVE_FORMAT_PCM or self.channels != 2 or fmt["bits"] != 16:
             raise ValueError(
-                f"WAV file must be stereo 16-bit PCM (channels={self.channels}, sampwidth={self.sampwidth})"
+                f"WAV file must be stereo 16-bit PCM (format={fmt['format']:#x}, channels={self.channels}, "
+                f"bits={fmt['bits']}): {wav_path}"
             )
+        if self.framerate <= 0:
+            raise ValueError(f"WAV file has no sample rate: {wav_path}")
 
         self.frame_bytes = self.channels * self.sampwidth  # 4
-        self.data_offset, self.data_bytes = self._locate_data_chunk(wav_path)
         self.data_bytes -= self.data_bytes % self.frame_bytes  # whole frames only
         if self.data_bytes < self.frame_bytes:
             raise ValueError(f"WAV file has no sample data: {wav_path}")
         self.total_samples = self.data_bytes // self.frame_bytes
 
         self._fd = os.open(wav_path, os.O_RDONLY)
-        self._read_pos = 0  # next block start, bytes into the data chunk (producer side)
-        self._blocks: collections.deque[bytes] = collections.deque()
+        # Blocks are numbered; block k starts at (k * step) % data_bytes. The consumer plays block
+        # `_consume_seq` next; the producer reserves `_next_seq` before its (threaded) read.
+        self._step = min(self.block_bytes, self.data_bytes)
+        self._next_seq = 0
+        self._consume_seq = 0
+        self._blocks: collections.deque[tuple[int, bytes]] = collections.deque()
         self._cur = memoryview(b"")
         self._cur_off = 0
         self._sync_reads = 0
@@ -79,9 +90,14 @@ class WavIQLooper:
         )
 
     @staticmethod
-    def _locate_data_chunk(wav_path: str) -> tuple[int, int]:
-        """Returns (offset, size) of the 'data' chunk, walking RIFF sub-chunks (fmt, LIST, ...)."""
+    def _parse_riff(wav_path: str) -> tuple[dict, int, int]:
+        """Walks the RIFF chunks. Returns (fmt, data offset, data size).
+
+        Parsed here rather than with the `wave` module, which rejects WAVE_FORMAT_EXTENSIBLE headers
+        (common in SDR recorders) before Python 3.12.
+        """
         file_size = os.path.getsize(wav_path)
+        fmt = None
         with open(wav_path, "rb") as f:
             riff = f.read(12)
             if len(riff) < 12 or riff[:4] != b"RIFF" or riff[8:12] != b"WAVE":
@@ -93,42 +109,64 @@ class WavIQLooper:
                 if len(header) < 8:
                     break
                 chunk_id, size = header[:4], int.from_bytes(header[4:8], "little")
-                if chunk_id == b"data":
+                if chunk_id == b"fmt ":
+                    body = f.read(min(size, 40))
+                    if len(body) < 16:
+                        raise ValueError(f"Truncated 'fmt ' chunk in {wav_path}")
+                    fmt = {
+                        "format": int.from_bytes(body[0:2], "little"),
+                        "channels": int.from_bytes(body[2:4], "little"),
+                        "rate": int.from_bytes(body[4:8], "little"),
+                        "bits": int.from_bytes(body[14:16], "little"),
+                    }
+                    # Extensible: the real format code is the first two bytes of the sub-format GUID
+                    if fmt["format"] == WAVE_FORMAT_EXTENSIBLE and len(body) >= 26:
+                        fmt["format"] = int.from_bytes(body[24:26], "little")
+                elif chunk_id == b"data":
+                    if fmt is None:
+                        raise ValueError(f"'data' chunk before 'fmt ' in {wav_path}")
                     # Some recorders write 0 or an oversized length for still-open files: clamp to the file
                     if size == 0 or pos + 8 + size > file_size:
                         size = file_size - pos - 8
-                    return pos + 8, size
+                    return fmt, pos + 8, size
                 pos += 8 + size + (size & 1)  # chunks are word-aligned
         raise ValueError(f"No 'data' chunk found in {wav_path}")
 
+    def _seq_pos(self, seq: int) -> int:
+        return (seq * self._step) % self.data_bytes
+
     def _read_block(self, pos: int) -> bytes:
-        """Reads `block_bytes` starting at data offset `pos`, wrapping around the end of the data."""
-        n = min(self.block_bytes, self.data_bytes)
+        """Reads one block starting at data offset `pos`, wrapping around the end of the data."""
+        n = self._step
         first = min(n, self.data_bytes - pos)
         out = os.pread(self._fd, first, self.data_offset + pos)
         if first < n:
             out += os.pread(self._fd, n - first, self.data_offset)
         return out
 
-    def _advance_read_pos(self):
-        self._read_pos = (self._read_pos + min(self.block_bytes, self.data_bytes)) % self.data_bytes
-
-    def _reserve_block_pos(self) -> int:
-        """Claim the next block offset before the read, so a sync fallback cannot repeat it."""
-        pos = self._read_pos
-        self._advance_read_pos()
-        return pos
+    def _reserve_seq(self) -> int:
+        """Claim the next block for the prefetch task. Never a block the consumer has already played."""
+        seq = max(self._next_seq, self._consume_seq)
+        self._next_seq = seq + 1
+        return seq
 
     def _take_next_block(self):
-        """Moves the next prefetched block into `_cur`; reads synchronously if the queue is empty."""
-        if self._blocks:
-            block = self._blocks.popleft()
+        """Moves block `_consume_seq` into `_cur`, reading it synchronously if it is not queued yet.
+
+        A prefetch read can still be in flight when the queue runs dry. The synchronous read then takes
+        that block's place, and the late copy is dropped here instead of being played out of order.
+        """
+        seq = self._consume_seq
+        while self._blocks and self._blocks[0][0] < seq:
+            self._blocks.popleft()
+        if self._blocks and self._blocks[0][0] == seq:
+            block = self._blocks.popleft()[1]
         else:
-            block = self._read_block(self._read_pos)
-            self._advance_read_pos()
+            block = self._read_block(self._seq_pos(seq))
             self._sync_reads += 1
             if self._sync_reads in (1, 10, 100) or self._sync_reads % 1000 == 0:
                 logger.warning(f"IQ prefetch queue empty, read synchronously ({self._sync_reads} times)")
+        self._consume_seq = seq + 1
         self._cur = memoryview(block)
         self._cur_off = 0
 
@@ -152,9 +190,10 @@ class WavIQLooper:
         loop = asyncio.get_running_loop()
         while True:
             if len(self._blocks) < self.prefetch_blocks:
-                pos = self._reserve_block_pos()
-                block = await loop.run_in_executor(None, self._read_block, pos)
-                self._blocks.append(block)
+                seq = self._reserve_seq()
+                block = await loop.run_in_executor(None, self._read_block, self._seq_pos(seq))
+                if seq >= self._consume_seq:
+                    self._blocks.append((seq, block))
             else:
                 await asyncio.sleep(0.1)
 
@@ -225,7 +264,7 @@ class DidahServer:
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     text = msg.data.strip()
                     if text.startswith("SERVER DE CLIENT"):
-                        await ws.send_str("CLIENT DE SERVER server=didahsdr version=1.0.0-cw")
+                        await ws.send_str(f"CLIENT DE SERVER server=didahsdr version={SERVER_VERSION}")
 
                         # Send config JSON
                         config_msg = {
@@ -306,18 +345,24 @@ def find_wav_file(specified: str | None = None) -> str:
     for c in candidates:
         if c and os.path.isfile(c):
             return os.path.abspath(c)
-    raise FileNotFoundError("Could not locate the WAV file. Please specify a valid path using --wav argument.")
+    raise FileNotFoundError(
+        "No IQ recording found. Pass a 16-bit stereo IQ WAV with --wav PATH (and --center-freq HZ); "
+        "recordings are not shipped in the repository, see README 'IQ recordings'."
+    )
 
 
 async def start_background_tasks(app):
     logger.info("Initializing IQ prefetch and raw IQ broadcast tasks...")
-    server = app["server"]
+    server = app[SERVER_KEY]
     tasks = [asyncio.create_task(server.looper.prefetch_loop()), asyncio.create_task(server.raw_iq_broadcast_loop())]
     yield
     for t in tasks:
         t.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
     server.looper.close()
+
+
+SERVER_KEY: web.AppKey["DidahServer"] = web.AppKey("server", DidahServer)
 
 
 def create_app(wav_path: str, static_dir: Path, center_freq: int):
@@ -338,7 +383,7 @@ def create_app(wav_path: str, static_dir: Path, center_freq: int):
         return response
 
     app = web.Application(middlewares=[isolation_headers])
-    app["server"] = server
+    app[SERVER_KEY] = server
     app.cleanup_ctx.append(start_background_tasks)
 
     app.router.add_get("/ws", server.handle_websocket)
@@ -375,13 +420,16 @@ def main():
     parser.add_argument("--center-freq", type=int, default=14048000, help="Center frequency in Hz (default: 14048000)")
     args = parser.parse_args()
 
-    wav_file = find_wav_file(args.wav)
     static_dir = Path(__file__).resolve().parent.parent / "app"
+    try:
+        wav_file = find_wav_file(args.wav)
+        app = create_app(wav_file, static_dir, args.center_freq)
+    except (FileNotFoundError, ValueError) as e:
+        logger.error(str(e))
+        sys.exit(2)
 
     logger.info(f"Serving static files from: {static_dir}")
     logger.info(f"didahSDR web server: http://localhost:{args.port}/")
-
-    app = create_app(wav_file, static_dir, args.center_freq)
     web.run_app(app, host=args.host, port=args.port)
 
 

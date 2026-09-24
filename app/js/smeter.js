@@ -65,10 +65,6 @@ class DidahSMeter {
         });
     }
 
-    show() { if (this.window) this.window.show(); }
-    hide() { if (this.window) this.window.hide(); }
-    toggle() { if (this.window) this.window.toggle(); }
-
     buildScaleSvg(width = 260, height = 24) {
         const pad = 12;
         const innerW = width - 2 * pad;

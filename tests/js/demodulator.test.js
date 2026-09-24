@@ -15,7 +15,7 @@ function run(demod, iq, chunk = 4800) {
 }
 
 test('CW: carrier at the tuned offset comes out at the BFO pitch', () => {
-    const d = new DidahDemodulator(RATE, AUDIO);
+    const d = new DidahDemodulator(RATE);
     d.setModulation('cw'); d.setOffsetFrequency(5000); d.setBfoPitch(700);
     const audio = run(d, iqTone(5000, RATE, RATE * 1.0, 0.1));
     const { freq } = audioPeak(audio, AUDIO);
@@ -23,30 +23,30 @@ test('CW: carrier at the tuned offset comes out at the BFO pitch', () => {
 });
 
 test('USB: tone 1 kHz above the carrier is heard at 1 kHz; the LSB image is rejected by >= 55 dB', () => {
-    const d = new DidahDemodulator(RATE, AUDIO);
+    const d = new DidahDemodulator(RATE);
     d.setModulation('usb'); d.setOffsetFrequency(0);
     const wanted = audioPeak(run(d, iqTone(1000, RATE, RATE, 0.1)), AUDIO);
     assert.ok(Math.abs(wanted.freq - 1000) < 12, `USB audio at ${wanted.freq} Hz`);
 
-    const d2 = new DidahDemodulator(RATE, AUDIO);
+    const d2 = new DidahDemodulator(RATE);
     d2.setModulation('usb'); d2.setOffsetFrequency(0);
     d2.agc.maxGain = 1;   // measure the filter, not the AGC's attempt to lift the residual
     const image = audioPeak(run(d2, iqTone(-1000, RATE, RATE, 0.1)), AUDIO);
-    const d3 = new DidahDemodulator(RATE, AUDIO);
+    const d3 = new DidahDemodulator(RATE);
     d3.setModulation('usb'); d3.setOffsetFrequency(0); d3.agc.maxGain = 1;
     const ref = audioPeak(run(d3, iqTone(1000, RATE, RATE, 0.1)), AUDIO);
     assert.ok(ref.db - image.db >= 55, `image rejection ${(ref.db - image.db).toFixed(1)} dB`);
 });
 
 test('LSB: tone 1 kHz below the carrier is heard at 1 kHz', () => {
-    const d = new DidahDemodulator(RATE, AUDIO);
+    const d = new DidahDemodulator(RATE);
     d.setModulation('lsb'); d.setOffsetFrequency(0);
     const { freq } = audioPeak(run(d, iqTone(-1000, RATE, RATE, 0.1)), AUDIO);
     assert.ok(Math.abs(freq - 1000) < 12, `LSB audio at ${freq} Hz`);
 });
 
 test('output buffer is reused and is the complex input length divided by 8', () => {
-    const d = new DidahDemodulator(RATE, AUDIO);
+    const d = new DidahDemodulator(RATE);
     assert.equal(d.channel.N, 129);
     const iq = floatIq(iqTone(1000, RATE, 2400, 0.1));
     const a = d.process(iq), b = d.process(iq);
@@ -56,7 +56,7 @@ test('output buffer is reused and is the complex input length divided by 8', () 
 });
 
 test('setIqRate(12000) skips the halfband and still puts a CW tone at the BFO pitch', () => {
-    const d = new DidahDemodulator(RATE, AUDIO);
+    const d = new DidahDemodulator(RATE);
     d.setIqRate(12000);
     assert.equal(d.decimate2, false);
     assert.equal(d.audioRate, 12000);
@@ -75,7 +75,7 @@ test('setIqRate(12000) skips the halfband and still puts a CW tone at the BFO pi
 });
 
 test('setIqRate(48000) decimates 4:1 to 12 kHz and keeps the BFO pitch', () => {
-    const d = new DidahDemodulator(RATE, AUDIO);
+    const d = new DidahDemodulator(RATE);
     d.setIqRate(48000);
     assert.equal(d.decim, 4);
     assert.equal(d.audioRate, 12000);
@@ -87,7 +87,7 @@ test('setIqRate(48000) decimates 4:1 to 12 kHz and keeps the BFO pitch', () => {
 });
 
 test('setIqRate(192000) decimates 16:1 to 12 kHz and keeps the BFO pitch', () => {
-    const d = new DidahDemodulator(RATE, AUDIO);
+    const d = new DidahDemodulator(RATE);
     d.setIqRate(192000);
     assert.equal(d.decim, 16);
     assert.equal(d.audioRate, 12000);
@@ -126,4 +126,17 @@ test('CW leaves a steady tone alone when the autonotch is enabled', () => {
     for (let i = 0; i < tail.length; i++) s += tail[i] * tail[i];
     const rms = Math.sqrt(s / tail.length);
     assert.ok(rms > 0.05, `CW tail rms ${rms.toFixed(4)} should survive the autonotch`);
+});
+
+test('autonotch and NR are SSB-only: in CW they leave the audio untouched', () => {
+    const iq = floatIq(iqTone(2000, 96000, 96000, 0.2));
+    const plain = new DidahDemodulator(96000);
+    plain.configure({ offsetFreq: 2000, modulation: 'cw' });
+    const fx = new DidahDemodulator(96000);
+    fx.configure({ offsetFreq: 2000, modulation: 'cw' });
+    fx.setNrEnabled(true);
+    fx.setAutonotchEnabled(true);
+    const a = Float32Array.from(plain.process(iq));
+    const b = Float32Array.from(fx.process(iq));
+    assert.deepEqual(b, a);
 });

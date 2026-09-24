@@ -9,7 +9,7 @@ const {
 } = req('civ.js');
 const {
     IC7300_IF_HZ, IC7300_CW_TRACE_HZ, IC7300_CW_PITCH_HZ, IC7300_OUT_RATE, IC7300_SSB_SPAN_HZ,
-    mapCivMode, didahToCivMode, ic7300DecimPlan, ic7300Geometry, ic7300View, ic7300Zoom,
+    mapCivMode, didahToCivMode, ic7300DecimPlan, ic7300Geometry, ic7300View,
     RealIfConverter
 } = req('ic7300_if.js');
 const { findSource } = req('sources.js');
@@ -143,7 +143,6 @@ test('48/96/192 kHz contexts emit 12 kHz; 44.1 kHz scales the pitch', () => {
     assert.equal(scaled.tunedFreq - scaled.centerFreq, expectOff);
     assert.notEqual(expectOff, -IC7300_CW_PITCH_HZ);
     assert.equal(ic7300DecimPlan(44100).outRate, 11025);
-    assert.equal(ic7300Zoom(12000, 24), 12000 / 2500);
 });
 
 function convertReal(conv, freq, rate, n) {
@@ -229,4 +228,43 @@ test('SSB view covers about 4 kHz of the sideband; CW stays on the trace', () =>
     const usbLo = usb.audioCenter - usb.span / 2;
     const usbHi = usb.audioCenter + usb.span / 2;
     assert.ok(usbLo <= 200 && usbHi >= 2700);
+});
+
+test('a key held past the watchdog is released and stays up until the keyer lets go', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const signals = [];
+    const statuses = [];
+    const cat = new Ic7300Cat({ keyWatchdogMs: 1000, onStatus: (text) => statuses.push(text) });
+    cat.port = { setSignals: (s) => { signals.push(s); return Promise.resolve(); } };
+    cat.setLines(true, true);
+    t.mock.timers.tick(999);
+    assert.equal(statuses.length, 0);
+    t.mock.timers.tick(1);
+    await cat._signalChain;
+    assert.deepEqual(signals[signals.length - 1], { dataTerminalReady: false, requestToSend: false });
+    assert.match(statuses[0], /released/);
+
+    // The keyer still reports key down: the lines must not come back.
+    const n = signals.length;
+    await cat.setLines(true, true);
+    assert.equal(signals.length, n);
+    // Key up clears the lockout; the next element keys normally.
+    await cat.setLines(false, false);
+    await cat.setLines(true, true);
+    assert.deepEqual(signals[signals.length - 1], { dataTerminalReady: true, requestToSend: true });
+});
+
+test('key edges inside the watchdog window never trip it', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const statuses = [];
+    const cat = new Ic7300Cat({ keyWatchdogMs: 1000, onStatus: (text) => statuses.push(text) });
+    cat.port = { setSignals: () => Promise.resolve() };
+    for (let i = 0; i < 20; i++) {
+        cat.setLines(true, true);
+        t.mock.timers.tick(400);
+        cat.setLines(false, true);
+        t.mock.timers.tick(100);
+    }
+    assert.equal(statuses.length, 0);
+    cat.releaseKey();
 });

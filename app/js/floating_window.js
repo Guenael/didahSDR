@@ -5,6 +5,16 @@
  * visibility persisted in localStorage under `${storageKey}_visible|_top|_left`.
  * Returns { show, hide, toggle, isVisible }; `onVisibilityChange(visible)` fires on every change.
  */
+/** localStorage throws in some private windows and when site data is blocked; the window still works. */
+const floatStore = {
+    get(key) {
+        try { return localStorage.getItem(key); } catch (e) { return null; }
+    },
+    set(key, value) {
+        try { localStorage.setItem(key, value); } catch (e) { /* storage unavailable */ }
+    }
+};
+
 function setupFloatingWindow({ windowId, headerId, closeBtnId, toggleBtnId, storageKey, defaultVisible, defaultPos, onVisibilityChange }) {
     const el = document.getElementById(windowId);
     const header = document.getElementById(headerId);
@@ -12,13 +22,13 @@ function setupFloatingWindow({ windowId, headerId, closeBtnId, toggleBtnId, stor
     const toggleBtn = document.getElementById(toggleBtnId);
     if (!el || !header) return null;
 
-    let visible = localStorage.getItem(`${storageKey}_visible`);
+    let visible = floatStore.get(`${storageKey}_visible`);
     visible = visible === null ? !!defaultVisible : visible === 'true';
 
     const apply = () => {
         el.style.display = visible ? 'flex' : 'none';
         if (toggleBtn) toggleBtn.classList.toggle('active', visible);
-        localStorage.setItem(`${storageKey}_visible`, String(visible));
+        floatStore.set(`${storageKey}_visible`, String(visible));
         if (onVisibilityChange) onVisibilityChange(visible);
     };
     const clamp = () => {
@@ -32,8 +42,8 @@ function setupFloatingWindow({ windowId, headerId, closeBtnId, toggleBtnId, stor
         el.style.bottom = 'auto';
     };
 
-    const storedTop = localStorage.getItem(`${storageKey}_top`);
-    const storedLeft = localStorage.getItem(`${storageKey}_left`);
+    const storedTop = floatStore.get(`${storageKey}_top`);
+    const storedLeft = floatStore.get(`${storageKey}_left`);
     if (storedTop && storedLeft) {
         el.style.top = storedTop;
         el.style.left = storedLeft;
@@ -67,8 +77,8 @@ function setupFloatingWindow({ windowId, headerId, closeBtnId, toggleBtnId, stor
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
         document.removeEventListener('pointercancel', onUp);
-        localStorage.setItem(`${storageKey}_left`, el.style.left);
-        localStorage.setItem(`${storageKey}_top`, el.style.top);
+        floatStore.set(`${storageKey}_left`, el.style.left);
+        floatStore.set(`${storageKey}_top`, el.style.top);
     };
     header.addEventListener('pointerdown', (e) => {
         if (closeBtn && (e.target === closeBtn || closeBtn.contains(e.target))) return;

@@ -1,7 +1,7 @@
 /**
  * didahSDR - REC for the CW decoder: captures a labelled-dataset clip at the decoder tap.
  *
- * One clip writes three files for the same instant (see REC-BUTTON.md):
+ * One clip writes three files for the same instant (format: docs/recording.md):
  *   <name>.wav        stereo int16 I/Q at the decoder rate: exactly what the model reads
  *                     (channel filtered, pre-BFO / AGC / NR, carrier at DC, after CwTapResampler).
  *   <name>.audio.wav  mono int16 demodulated audio at the channel rate: what the operator heard.
@@ -64,13 +64,21 @@ function recName(date, carrierHz, kind) {
     return `${kind === 'noise' ? 'noise_' : ''}didah_${d}_${t}_${Math.round(carrierHz)}`;
 }
 
+/** How long a stopped clip waits for the decoder to catch up (model lookahead + one step) at most. */
+const REC_DRAIN_MS = 3000;
+/** Stops after which the decoder keeps running, so the clip's last characters are still coming. */
+const REC_DRAIN_REASONS = new Set(['user', 'limit']);
+
 class CWRecorder {
-    /** @param {{ onStop?: (clip: object) => void, maxSeconds?: number }} [opts] */
+    /** @param {{ onStop?: (clip: object) => void, maxSeconds?: number, drainMs?: number }} [opts] */
     constructor(opts = {}) {
         this.onStop = opts.onStop || null;
         this.maxSeconds = opts.maxSeconds || REC_MAX_S;
+        this.drainMs = opts.drainMs != null ? opts.drainMs : REC_DRAIN_MS;
         this.recording = false;
+        this.draining = false;
         this.meta = null;
+        this._drainTimer = null;
     }
 
     /**
@@ -78,12 +86,15 @@ class CWRecorder {
      *   rate = decoder tap rate, audioRate = demodulated audio rate; any other key goes to the sidecar.
      */
     start(meta) {
+        if (this.draining) this._finish();
         this.meta = { kind: 'signal', ...meta };
         this.started = new Date();
         this.iq = [];
         this.audio = [];
         this.frames = 0;
         this.hyp = '';
+        this.startPos = null;   // decoder tap clock (CWDecoder.tapPos) of the first recorded sample
+        this.endPos = Infinity;
         this.recording = true;
     }
 
@@ -91,8 +102,10 @@ class CWRecorder {
         return this.recording ? this.frames / this.meta.rate : 0;
     }
 
-    pushTap(i, q, n) {
+    /** `pos`: decoder tap clock of i[0], used to align the live decode with the clip. */
+    pushTap(i, q, n, pos) {
         if (!this.recording) return;
+        if (this.startPos == null && pos != null) this.startPos = pos;
         const c = new Float32Array(2 * n);
         for (let k = 0; k < n; k++) {
             c[2 * k] = i[k];
@@ -107,16 +120,51 @@ class CWRecorder {
         if (this.recording) this.audio.push(buf.slice(0, n));
     }
 
-    pushText(text) {
-        if (this.recording) this.hyp += text;
+    /**
+     * Live decode for the draft transcript. The model answers about a second late, so the first text
+     * after REC describes audio from before the clip: with `at` (tap position of each character) only
+     * the characters inside [start, end) are kept. `upTo` (decoded so far) ends a draining clip.
+     */
+    pushText(text, at, upTo) {
+        if (!this.recording && !this.draining) return;
+        if (!at || this.startPos == null) {
+            if (this.recording) this.hyp += text;
+        } else {
+            for (let k = 0; k < text.length; k++) {
+                const p = at[k];
+                if (p == null || (p >= this.startPos && p < this.endPos)) this.hyp += text[k];
+            }
+        }
+        if (this.draining && upTo != null && upTo >= this.endPos) this._finish();
     }
 
-    /** Ends the clip, returns it (null if nothing was captured) and hands it to onStop. */
+    /**
+     * Ends the clip. After a user stop (or the length cap) the decoder is still running, so the clip is
+     * saved once the decode has caught up with its last sample (or after drainMs); stop() then returns
+     * null and onStop gets the clip. Any other stop (reset, decoder off) saves at once and returns it.
+     */
     stop(reason = 'user') {
+        if (this.draining) return this._finish();
         if (!this.recording) return null;
         this.recording = false;
-        const m = this.meta;
         if (!this.frames) return null;
+        this.stopReason = reason;
+        if (this.startPos != null && REC_DRAIN_REASONS.has(reason) && this.drainMs > 0) {
+            this.endPos = this.startPos + this.frames;
+            this.draining = true;
+            this._drainTimer = setTimeout(() => this._finish(), this.drainMs);
+            return null;
+        }
+        return this._finish();
+    }
+
+    _finish() {
+        if (this._drainTimer) {
+            clearTimeout(this._drainTimer);
+            this._drainTimer = null;
+        }
+        this.draining = false;
+        const m = this.meta;
         const gain = peakGain(this.iq);
         const audioGain = peakGain(this.audio);
         const { rate, audioRate, carrierHz, ...rest } = m;
@@ -130,7 +178,7 @@ class CWRecorder {
             audio_gain: audioGain,
             started_utc: this.started.toISOString(),
             duration_s: +(this.frames / rate).toFixed(3),
-            stop_reason: reason,
+            stop_reason: this.stopReason,
             hyp: this.hyp.trim(),
         };
         const clip = {
@@ -166,5 +214,5 @@ function saveRecording(clip) {
 }
 
 if (typeof module !== 'undefined') {
-    module.exports = { CWRecorder, encodeWavInt16, peakGain, recName, saveRecording, REC_MAX_S };
+    module.exports = { CWRecorder, encodeWavInt16, peakGain, recName, saveRecording, REC_MAX_S, REC_DRAIN_MS };
 }

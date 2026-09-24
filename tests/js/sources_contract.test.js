@@ -36,3 +36,36 @@ test('SAB ring round-trips floats and leaves one slot empty', () => {
     assert.ok(wrote < 16384, `wrote ${wrote}`);
     assert.ok(wrote > 16000, `wrote ${wrote}`);
 });
+
+test('every source keeps the callbacks it is given (a dropped one fails silently)', () => {
+    req('civ.js');
+    req('ic7300_if.js');
+    const DidahConnection = req('connection.js');
+    const { KiwiConnection } = req('kiwi.js');
+    const { SoundcardSource } = req('soundcard.js');
+    const { Ic7300Source } = req('ic7300.js');
+    const { RtlSdrSource } = req('rtlsdr.js');
+    const cb = () => {};
+    const cases = [
+        [DidahConnection, ['onRawIQ', 'onConfig', 'onStatusChange'], { url: 'ws://x/ws' }],
+        [KiwiConnection, ['onRawIQ', 'onReady', 'onStatusChange', 'onCenterApplied'], {}],
+        [SoundcardSource, ['onRawIQ', 'onReady', 'onStatusChange', 'onDevices'], {}],
+        [Ic7300Source, ['onRawIQ', 'onReady', 'onStatusChange', 'onDevices', 'onFrequency', 'onMode'], {}],
+        [RtlSdrSource, ['onRawIQ', 'onReady', 'onStatusChange', 'onCenterApplied'], {}],
+    ];
+    for (const [Ctor, names, extra] of cases) {
+        const opts = Object.assign({}, extra);
+        for (const n of names) opts[n] = cb;
+        const src = new Ctor(opts);
+        for (const n of names) assert.equal(src[n], cb, `${Ctor.name}.${n}`);
+    }
+});
+
+test('source policy: only Kiwi and RTL-SDR follow the dial; every catalog source has a label', () => {
+    const { sourcePolicy } = req('sources_controller.js');
+    const { SOURCES } = req('sources.js');
+    for (const src of SOURCES) assert.ok(sourcePolicy(src.protocol).label, src.id);
+    const following = SOURCES.filter((s) => sourcePolicy(s.protocol).followsDial).map((s) => s.protocol).sort();
+    assert.deepEqual(following, ['kiwi', 'rtlsdr']);
+    assert.equal(sourcePolicy('nope').label, sourcePolicy('didah').label);
+});

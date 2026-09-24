@@ -10,6 +10,8 @@ const CIV_ADDR_IC7300 = 0x94;
 const CIV_ADDR_CONTROLLER = 0xE0;
 const CIV_BAUD_DEFAULT = 19200;
 const CIV_BAUDS = [4800, 9600, 19200, 38400];
+/** A key line held down longer than this is treated as stuck and released. */
+const CIV_KEY_WATCHDOG_MS = 10000;
 
 /** 5-byte CI-V frequency, LSB first. 14200000 Hz → 00 00 20 14 00. */
 function encodeFreqBcd(hz) {
@@ -178,6 +180,9 @@ class Ic7300Cat {
         this._readDone = null;
         this._writeChain = Promise.resolve();
         this._signalChain = Promise.resolve();
+        this.keyWatchdogMs = opts.keyWatchdogMs || CIV_KEY_WATCHDOG_MS;
+        this._keyTimer = null;
+        this._keyLockout = false;
     }
 
     setBaud(baud) {
@@ -249,8 +254,13 @@ class Ic7300Cat {
      * SEND is raised one step before the key so the first dit is not lost when BK-IN is off.
      */
     setLines(keyDown, sendHeld) {
-        const key = !!keyDown;
-        const send = !!sendHeld;
+        let key = !!keyDown;
+        let send = !!sendHeld;
+        // After the watchdog fired, stay released until the keyer lets go of the key.
+        if (this._keyLockout) {
+            if (key) { key = false; send = false; } else this._keyLockout = false;
+        }
+        this._armKeyWatchdog(key);
         const swap = this.pttOnDtr;
         const d = swap ? send : key;
         const r = swap ? key : send;
@@ -264,10 +274,25 @@ class Ic7300Cat {
     }
 
     releaseKey() {
+        this._armKeyWatchdog(false);
         this._dtr = false;
         this._rts = false;
         this._linesSent = true;
         return this._enqueueSignals(false, false);
+    }
+
+    _armKeyWatchdog(keyDown) {
+        if (!keyDown) {
+            if (this._keyTimer) { clearTimeout(this._keyTimer); this._keyTimer = null; }
+            return;
+        }
+        if (this._keyTimer) return;
+        this._keyTimer = setTimeout(() => {
+            this._keyTimer = null;
+            this._keyLockout = true;
+            this.releaseKey();
+            this.onStatus(`CW key held over ${Math.round(this.keyWatchdogMs / 1000)} s: released.`, this.connected);
+        }, this.keyWatchdogMs);
     }
 
     /** Each edge is applied in order. Levels are captured so a later dit cannot erase an earlier one. */
@@ -389,6 +414,7 @@ if (typeof globalThis !== 'undefined') {
     globalThis.CIV_ADDR_IC7300 = CIV_ADDR_IC7300;
     globalThis.CIV_ADDR_CONTROLLER = CIV_ADDR_CONTROLLER;
     globalThis.CIV_BAUD_DEFAULT = CIV_BAUD_DEFAULT;
+    globalThis.CIV_KEY_WATCHDOG_MS = CIV_KEY_WATCHDOG_MS;
     globalThis.encodeFreqBcd = encodeFreqBcd;
     globalThis.decodeFreqBcd = decodeFreqBcd;
     globalThis.civCommand = civCommand;
@@ -403,7 +429,7 @@ if (typeof globalThis !== 'undefined') {
 }
 if (typeof module !== 'undefined') {
     module.exports = {
-        CIV_ADDR_IC7300, CIV_ADDR_CONTROLLER, CIV_BAUD_DEFAULT, CIV_BAUDS,
+        CIV_ADDR_IC7300, CIV_ADDR_CONTROLLER, CIV_BAUD_DEFAULT, CIV_BAUDS, CIV_KEY_WATCHDOG_MS,
         encodeFreqBcd, decodeFreqBcd, civCommand, civSetFrequency, civSetMode,
         civSetKeySpeed, civSendCw, civKeySpeedValue, classifyCivFrame, CivParser, Ic7300Cat
     };

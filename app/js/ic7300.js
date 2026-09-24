@@ -8,12 +8,6 @@
  * Web Serial session; this file never sends a frequency.
  */
 
-const IC7300_AUDIO_OFF = {
-    echoCancellation: false,
-    autoGainControl: false,
-    noiseSuppression: false
-};
-
 class Ic7300Source {
     constructor(options) {
         const opts = options || {};
@@ -95,25 +89,10 @@ class Ic7300Source {
         return this.cat.releaseKey();
     }
 
-    async enable() {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            this._status('IC-7300 audio needs a secure context (https or localhost).', false);
-            return false;
-        }
-        let stream;
-        try {
-            stream = await navigator.mediaDevices.getUserMedia({
-                audio: Object.assign({ sampleRate: { ideal: IC7300_NATIVE_RATE } }, IC7300_AUDIO_OFF)
-            });
-        } catch (e) {
-            this._status('Microphone permission denied.', false);
-            return false;
-        }
-        stream.getTracks().forEach((t) => t.stop());
-        this._status('Listing audio inputs (48 kHz)…', false);
-        await this.refreshDevices();
-        onAudioDevicesChanged(() => { this.refreshDevices(); });
-        return true;
+    enable() {
+        return enableAudioInputs(this, { sampleRate: { ideal: IC7300_NATIVE_RATE } }, {
+            name: 'IC-7300 audio', listing: 'Listing audio inputs (48 kHz)…'
+        });
     }
 
     async refreshDevices() {
@@ -125,7 +104,7 @@ class Ic7300Source {
     _gum(deviceId, extra) {
         const audio = Object.assign({
             deviceId: deviceId ? { exact: deviceId } : undefined
-        }, IC7300_AUDIO_OFF, extra || {});
+        }, RAW_AUDIO_CONSTRAINTS, extra || {});
         return navigator.mediaDevices.getUserMedia({ audio });
     }
 
@@ -245,40 +224,12 @@ class Ic7300Source {
         await this._shutdown();
     }
 
-    /** Stop a capture that this start() still owns. A newer start keeps its own stream. */
-    async _abandon(stream, ctx) {
-        if (stream) {
-            if (this.stream === stream) this.stream = null;
-            stream.getTracks().forEach((t) => t.stop());
-        }
-        if (ctx) {
-            if (this.ctx === ctx) this.ctx = null;
-            try { await ctx.close(); } catch (e) { /* already closed */ }
-        }
+    _abandon(stream, ctx) {
+        return abandonCapture(this, stream, ctx);
     }
 
-    async _shutdown() {
-        if (this.node) {
-            try { this.node.disconnect(); } catch (e) { /* already gone */ }
-            this.node = null;
-        }
-        if (this.sourceNode) {
-            try { this.sourceNode.disconnect(); } catch (e) { /* already gone */ }
-            this.sourceNode = null;
-        }
-        if (this.mute) {
-            try { this.mute.disconnect(); } catch (e) { /* already gone */ }
-            this.mute = null;
-        }
-        if (this.stream) {
-            this.stream.getTracks().forEach((t) => t.stop());
-            this.stream = null;
-        }
-        if (this.ctx) {
-            const ctx = this.ctx;
-            this.ctx = null;
-            try { await ctx.close(); } catch (e) { /* already closed */ }
-        }
+    _shutdown() {
+        return shutdownCapture(this);
     }
 }
 

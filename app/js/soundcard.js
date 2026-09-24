@@ -6,37 +6,10 @@
  */
 
 const SOUND_RATES = [48000, 96000, 192000];
-/** Try 96 kHz first (SoftRock), then 48, then 192. Browsers disagree on the unconstrained default. */
-const PREFERRED_RATES = [96000, 48000, 192000];
 
 function isSoundRate(rate) {
     const r = Math.round(Number(rate) || 0);
     return SOUND_RATES.indexOf(r) >= 0;
-}
-
-/** First rate in PREFERRED_RATES that appears in `working` (already rounded Hz). */
-function preferredCaptureRate(working) {
-    const set = working || [];
-    for (let i = 0; i < PREFERRED_RATES.length; i++) {
-        if (set.indexOf(PREFERRED_RATES[i]) >= 0) return PREFERRED_RATES[i];
-    }
-    return 0;
-}
-
-/**
- * Pick 48, 96 or 192 kHz inside [min, max], preferring `native` when it is allowed,
- * otherwise the highest allowed rate. Returns 0 if none fit.
- */
-function pickSoundRate(min, max, native) {
-    const lo = min == null ? -Infinity : min;
-    const hi = max == null ? Infinity : max;
-    const n = Math.round(Number(native) || 0);
-    if (isSoundRate(n) && n >= lo && n <= hi) return n;
-    for (let i = SOUND_RATES.length - 1; i >= 0; i--) {
-        const r = SOUND_RATES[i];
-        if (r >= lo && r <= hi) return r;
-    }
-    return 0;
 }
 
 /**
@@ -59,38 +32,6 @@ function packStereoIq(left, right, swap, dst, dstOff, count, srcOff) {
     }
     return n;
 }
-
-/**
- * @param {{ channelCount?: number, sampleRate?: number, sampleRateMin?: number, sampleRateMax?: number }} info
- * @returns {{ ok: boolean, rate: number, channels: number, native: number }}
- */
-function classifyCapture(info) {
-    const ch = Math.round(Number(info.channelCount) || 1);
-    const native = Math.round(Number(info.sampleRate) || 0);
-    const min = info.sampleRateMin != null ? info.sampleRateMin : native || null;
-    const max = info.sampleRateMax != null ? info.sampleRateMax : native || null;
-    const rate = pickSoundRate(min, max, native);
-    return { ok: ch >= 2 && rate > 0, rate, channels: ch, native };
-}
-
-function trackCaptureInfo(track) {
-    const set = (track.getSettings && track.getSettings()) || {};
-    const cap = (track.getCapabilities && track.getCapabilities()) || {};
-    const sr = cap.sampleRate || {};
-    const ch = cap.channelCount || {};
-    return classifyCapture({
-        channelCount: ch.max || set.channelCount || 1,
-        sampleRate: set.sampleRate,
-        sampleRateMin: sr.min,
-        sampleRateMax: sr.max
-    });
-}
-
-const AUDIO_CONSTRAINTS_OFF = {
-    echoCancellation: false,
-    autoGainControl: false,
-    noiseSuppression: false
-};
 
 class SoundcardSource {
     constructor(options) {
@@ -124,25 +65,8 @@ class SoundcardSource {
         if (this.onStatusChange) this.onStatusChange(text, !!ok);
     }
 
-    async enable() {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            this._status('Sound card needs a secure context (https or localhost).', false);
-            return false;
-        }
-        let stream;
-        try {
-            stream = await navigator.mediaDevices.getUserMedia({
-                audio: Object.assign({}, AUDIO_CONSTRAINTS_OFF)
-            });
-        } catch (e) {
-            this._status('Microphone permission denied.', false);
-            return false;
-        }
-        stream.getTracks().forEach((t) => t.stop());
-        this._status('Listing sound-card inputs…', false);
-        await this.refreshDevices();
-        onAudioDevicesChanged(() => { this.refreshDevices(); });
-        return true;
+    enable() {
+        return enableAudioInputs(this, {}, { name: 'Sound card', listing: 'Listing sound-card inputs…' });
     }
 
     async refreshDevices() {
@@ -155,7 +79,7 @@ class SoundcardSource {
         const audio = Object.assign({
             deviceId: { exact: deviceId },
             channelCount: { ideal: 2 }
-        }, AUDIO_CONSTRAINTS_OFF, extra || {});
+        }, RAW_AUDIO_CONSTRAINTS, extra || {});
         return navigator.mediaDevices.getUserMedia({ audio });
     }
 
@@ -201,9 +125,7 @@ class SoundcardSource {
                         deviceId: { exact: deviceId },
                         channelCount: { ideal: 2 },
                         sampleRate: { ideal: want },
-                        echoCancellation: false,
-                        autoGainControl: false,
-                        noiseSuppression: false
+                        ...RAW_AUDIO_CONSTRAINTS
                     });
                 } catch (e) { /* Chrome often rejects these */ }
             }
@@ -305,40 +227,12 @@ class SoundcardSource {
         await this._shutdown();
     }
 
-    /** Stop a capture that this start() still owns. A newer start keeps its own stream. */
-    async _abandon(stream, ctx) {
-        if (stream) {
-            if (this.stream === stream) this.stream = null;
-            stream.getTracks().forEach((t) => t.stop());
-        }
-        if (ctx) {
-            if (this.ctx === ctx) this.ctx = null;
-            try { await ctx.close(); } catch (e) { /* already closed */ }
-        }
+    _abandon(stream, ctx) {
+        return abandonCapture(this, stream, ctx);
     }
 
-    async _shutdown() {
-        if (this.node) {
-            try { this.node.disconnect(); } catch (e) { /* already gone */ }
-            this.node = null;
-        }
-        if (this.sourceNode) {
-            try { this.sourceNode.disconnect(); } catch (e) { /* already gone */ }
-            this.sourceNode = null;
-        }
-        if (this.mute) {
-            try { this.mute.disconnect(); } catch (e) { /* already gone */ }
-            this.mute = null;
-        }
-        if (this.stream) {
-            this.stream.getTracks().forEach((t) => t.stop());
-            this.stream = null;
-        }
-        if (this.ctx) {
-            const ctx = this.ctx;
-            this.ctx = null;
-            try { await ctx.close(); } catch (e) { /* already closed */ }
-        }
+    _shutdown() {
+        return shutdownCapture(this);
     }
 }
 
@@ -346,7 +240,6 @@ if (typeof globalThis !== 'undefined') globalThis.packStereoIq = packStereoIq;
 
 if (typeof module !== 'undefined') {
     module.exports = {
-        SoundcardSource, SOUND_RATES, PREFERRED_RATES, isSoundRate, pickSoundRate,
-        preferredCaptureRate, packStereoIq, classifyCapture
+        SoundcardSource, SOUND_RATES, isSoundRate, packStereoIq
     };
 }

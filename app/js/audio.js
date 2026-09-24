@@ -17,7 +17,7 @@ class WebAudioPlayer {
 
         this.volume = 0.8;
         this.muted = false;
-        this.INPUT_RATE = 48000;     // demodulator output rate; the AudioContext stays at 48 kHz
+        this.INPUT_RATE = 12000;     // demodulator channel rate (~12 kHz); the AudioContext runs at 48 kHz
 
         this.onStateChange = null;
         this.onLevel = null;
@@ -171,7 +171,7 @@ class WebAudioPlayer {
         this.node.port.postMessage(copy, [copy.buffer]);
     }
 
-    /** Tell the worklet the demodulator output rate (48 kHz replay, ~12 kHz Kiwi). */
+    /** Tell the worklet the demodulator output rate (the channel rate, 12 kHz or 11.025 kHz). */
     setInputRate(rate) {
         this.INPUT_RATE = Math.max(1000, rate);
         if (this.node) this.node.port.postMessage({ type: 'inputRate', rate: this.INPUT_RATE });

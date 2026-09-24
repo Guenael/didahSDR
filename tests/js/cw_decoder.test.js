@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 require('./load.js');
-const { cwTokenClass, cwHighlightHtml, cwConsumeText, CWDecoder } = require('../../app/js/cw_decoder.js');
+const { cwTokenClass, cwConsumeText, CWDecoder } = require('../../app/js/cw_decoder.js');
 
 test('token classes: exchanges before keywords before callsigns', () => {
     assert.equal(cwTokenClass('5NN'), 'cwd-exch');
@@ -14,12 +14,6 @@ test('token classes: exchanges before keywords before callsigns', () => {
     assert.equal(cwTokenClass('HELLO'), 'cwd-plain');
     assert.equal(cwTokenClass('R'), 'cwd-plain'); // single letters are not keywords
     assert.equal(cwTokenClass('599'), 'cwd-exch'); // not a callsign
-});
-
-test('highlight keeps the trailing partial word pending and escapes HTML', () => {
-    const html = cwHighlightHtml('CQ DE W1A');
-    assert.match(html, /<span class="cwd-kw">CQ<\/span> <span class="cwd-kw">DE<\/span> <span class="cwd-pending">W1A<\/span>/);
-    assert.equal(cwHighlightHtml('<X>'), '<span class="cwd-pending">&lt;X&gt;</span>');
 });
 
 test('usable rates snap to multiples of 800 within 1 %', () => {
@@ -91,4 +85,17 @@ test('greedy CTC collapses repeats, drops blanks, carries prev across chunks', (
     assert.equal(r.prev, 1);
     const r2 = ctcGreedy(lp.subarray(4 * C), 2, C, chars, blank, r.prev);
     assert.equal(r2.text, '');
+});
+
+test('a missing model keeps the decoder off and says why', () => {
+    const status = { textContent: '', className: '', title: '' };
+    const demod = { tapCallback: null };
+    const dec = new CWDecoder(demod, { output: null, status });
+    dec.setMissing('models/didahcw.onnx not installed (see README)');
+    dec.start(12000);
+    assert.equal(dec.active, false);
+    assert.equal(dec.worker, null);
+    assert.equal(demod.tapCallback, null);
+    assert.equal(status.textContent, 'NO MODEL');
+    assert.match(status.title, /README/);
 });

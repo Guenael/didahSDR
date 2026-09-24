@@ -13,7 +13,7 @@ class DidahConnection {
         this.iqBuf = new Int16Array(0);   // reused receive buffer, reallocated only if the packet size changes
 
         // Callback hooks
-        this.onRawIQ = options.onRawIQ || null;             // (Int16Array) => void (0x03 raw binary)
+        this.onRawIQ = options.onRawIQ || null;             // (Float32Array interleaved ±1, nComplex) => void
         this.onConfig = options.onConfig || null;           // (configObj) => void
         this.onStatusChange = options.onStatusChange || null; // (statusStr, isConnected) => void
     }
@@ -52,7 +52,7 @@ class DidahConnection {
                 this.connected = true;
                 this.notifyStatus('Handshaking...', false);
                 // Send handshake
-                this.ws.send('SERVER DE CLIENT client=didahsdr version=1.0.0-cw type=receiver');
+                this.ws.send('SERVER DE CLIENT client=didahsdr version=0.1.0 type=receiver');
             };
 
             this.ws.onmessage = (event) => {
@@ -115,7 +115,6 @@ class DidahConnection {
             if (msg.type === 'config' && this.onConfig) {
                 this.onConfig(msg.value);
             }
-            // 'modes' is sent by the server for protocol compatibility; the client uses its own mode table.
         } catch (e) {
             console.warn('Non-JSON text message received:', text);
         }
@@ -129,7 +128,7 @@ class DidahConnection {
             // payload, so it is copied into a reused, aligned Int16Array. The array handed to
             // onRawIQ is valid until the next packet (same contract as the demodulator output).
             const payloadBytes = buffer.byteLength - 1;
-            if (this.iqBuf.byteLength !== payloadBytes) this.iqBuf = new Int16Array(payloadBytes >> 1);
+            if (this.iqBuf.length !== payloadBytes >> 1) this.iqBuf = new Int16Array(payloadBytes >> 1);
             new Uint8Array(this.iqBuf.buffer).set(new Uint8Array(buffer, 1, payloadBytes & ~1));
             const n = this.iqBuf.length;
             if (!this.f32 || this.f32.length !== n) this.f32 = new Float32Array(n);

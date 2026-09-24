@@ -1101,6 +1101,11 @@ kbd {
     opacity: 0.4;
 }
 
+/* SSB-only audio FX (autonotch, NR) while in CW */
+.toggle-btn.is-dimmed {
+    opacity: 0.45;
+}
+
 /* Source window: IQ catalog radios */
 .source-window {
     width: 420px;
@@ -1425,6 +1430,7 @@ kbd {
 .cwd-status-ready { color: #00e676; border-color: #1f5232; }
 .cwd-status-loading { color: var(--accent-gold); }
 .cwd-status-error { color: var(--accent-red); border-color: #5a1f1f; }
+.cwd-status-missing { color: var(--accent-gold); border-color: #5a4a1f; }
 
 .cwd-output {
     font-family: var(--font-mono);

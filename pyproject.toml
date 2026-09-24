@@ -16,9 +16,6 @@ dependencies = [
     "aiohttp>=3.9.0",
 ]
 
-[project.scripts]
-didahsdr = "server.replay_server:main"
-
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["server*"]
@@ -26,8 +23,12 @@ include = ["server*"]
 [project.optional-dependencies]
 test = [
     "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
     "pytest-cov",
+]
+dev = [
+    "didahsdr[test]",
+    "ruff",
+    "black",
 ]
 
 [tool.pytest.ini_options]
@@ -37,9 +38,11 @@ addopts = "-v --tb=short"
 
 [tool.ruff]
 line-length = 120
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W"]
 
 [tool.black]
 line-length = 120
+target-version = ["py310"]
