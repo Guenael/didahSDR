@@ -1,7 +1,7 @@
 /**
  * didahSDR - Shared mode table and display constants
  *
- * Single source of truth for the demodulation passbands, consumed by app.js (UI/highlight),
+ * Single source of truth for the demodulation passbands, consumed by tuning.js (UI/highlight),
  * demodulator.js (channel filter), smeter.js (SNR window) and waterfall.js (texture range).
  * CW has no fixed passband: it is ±cwBandwidth/2 around the carrier, set at runtime.
  * USB/LSB share one audio low/high pair; LSB is the negated USB interval.
