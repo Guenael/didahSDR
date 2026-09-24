@@ -10,7 +10,7 @@
  *   ic7300_controller.js  following / writing the IC-7300 VFO over CI-V
  *   tx_controller.js      paddles, PTT, typeahead, IC-7300 key lines
  *   ui_bindings.js        panels, decoder window, REC, help, keyboard
- *   settings_store.js     localStorage persistence of the operator settings
+ *   prefs_store.js     localStorage persistence of the operator settings
  */
 
 document.addEventListener('DOMContentLoaded', () => {

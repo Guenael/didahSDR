@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createSettingsStore, SETTINGS_KEY } = require('../../app/js/settings_store.js');
+const { createSettingsStore, SETTINGS_KEY } = require('../../app/js/prefs_store.js');
 
 function memoryStorage(initial) {
     const data = new Map(Object.entries(initial || {}));
