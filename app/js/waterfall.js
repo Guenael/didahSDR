@@ -506,13 +506,13 @@ class HorizontalWaterfall {
     }
 
     freqToY(freq) {
-        const { start, end, span } = this.getVisibleFreqRange();
+        const { end, span } = this.getVisibleFreqRange();
         const frac = (end - freq) / span;
         return frac * this.wfHeight;
     }
 
     yToFreq(y) {
-        const { start, end, span } = this.getVisibleFreqRange();
+        const { end, span } = this.getVisibleFreqRange();
         const frac = y / this.wfHeight;
         return end - frac * span;
     }

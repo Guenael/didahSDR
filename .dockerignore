@@ -1,9 +1,19 @@
 .git
+.github
 .venv
+.cursor
 __pycache__
 *.py[cod]
+*.egg-info
 .pytest_cache
-tmp
-samples/HDSDR_*
+.ruff_cache
 .coverage
 htmlcov
+node_modules
+tmp
+art
+samples
+tests
+*.log
+# Fetched fresh (and verified) by the ort build stage
+app/lib

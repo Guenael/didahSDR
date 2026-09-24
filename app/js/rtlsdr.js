@@ -316,7 +316,8 @@ class RtlCom {
         try {
             await this.device.claimInterface(0);
         } catch (e) {
-            throw new Error('Could not claim the RTL-SDR. Close other SDR apps, and on Linux unload dvb_usb_rtl28xxu.');
+            throw new Error('Could not claim the RTL-SDR. Close other SDR apps, and on Linux unload dvb_usb_rtl28xxu.',
+                { cause: e });
         }
     }
 
@@ -470,7 +471,7 @@ class R820Tuner {
 
     static async detect(com) {
         await com.openI2C();
-        let found = false;
+        let found;
         try {
             found = (await com.getI2CReg(0x34, 0)) === 0x69;
         } catch (e) { found = false; }

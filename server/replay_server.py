@@ -19,7 +19,7 @@ import collections
 import json
 import logging
 import os
-import wave
+import sys
 from pathlib import Path
 
 import aiohttp
@@ -29,6 +29,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("didahSDR-Server")
 
 SERVER_VERSION = "0.1.0"  # keep in step with pyproject.toml
+
+
+WAVE_FORMAT_PCM = 0x0001
+WAVE_FORMAT_EXTENSIBLE = 0xFFFE
 
 
 class WavIQLooper:
@@ -50,18 +54,19 @@ class WavIQLooper:
         self.block_bytes = block_bytes
         self.prefetch_blocks = prefetch_blocks
 
-        with wave.open(wav_path, "rb") as w:
-            self.channels = w.getnchannels()
-            self.sampwidth = w.getsampwidth()
-            self.framerate = w.getframerate()
-            self.nframes = w.getnframes()
-        if self.channels != 2 or self.sampwidth != 2:
+        fmt, self.data_offset, self.data_bytes = self._parse_riff(wav_path)
+        self.channels = fmt["channels"]
+        self.sampwidth = fmt["bits"] // 8
+        self.framerate = fmt["rate"]
+        if fmt["format"] != WAVE_FORMAT_PCM or self.channels != 2 or fmt["bits"] != 16:
             raise ValueError(
-                f"WAV file must be stereo 16-bit PCM (channels={self.channels}, sampwidth={self.sampwidth})"
+                f"WAV file must be stereo 16-bit PCM (format={fmt['format']:#x}, channels={self.channels}, "
+                f"bits={fmt['bits']}): {wav_path}"
             )
+        if self.framerate <= 0:
+            raise ValueError(f"WAV file has no sample rate: {wav_path}")
 
         self.frame_bytes = self.channels * self.sampwidth  # 4
-        self.data_offset, self.data_bytes = self._locate_data_chunk(wav_path)
         self.data_bytes -= self.data_bytes % self.frame_bytes  # whole frames only
         if self.data_bytes < self.frame_bytes:
             raise ValueError(f"WAV file has no sample data: {wav_path}")
@@ -85,9 +90,14 @@ class WavIQLooper:
         )
 
     @staticmethod
-    def _locate_data_chunk(wav_path: str) -> tuple[int, int]:
-        """Returns (offset, size) of the 'data' chunk, walking RIFF sub-chunks (fmt, LIST, ...)."""
+    def _parse_riff(wav_path: str) -> tuple[dict, int, int]:
+        """Walks the RIFF chunks. Returns (fmt, data offset, data size).
+
+        Parsed here rather than with the `wave` module, which rejects WAVE_FORMAT_EXTENSIBLE headers
+        (common in SDR recorders) before Python 3.12.
+        """
         file_size = os.path.getsize(wav_path)
+        fmt = None
         with open(wav_path, "rb") as f:
             riff = f.read(12)
             if len(riff) < 12 or riff[:4] != b"RIFF" or riff[8:12] != b"WAVE":
@@ -99,11 +109,26 @@ class WavIQLooper:
                 if len(header) < 8:
                     break
                 chunk_id, size = header[:4], int.from_bytes(header[4:8], "little")
-                if chunk_id == b"data":
+                if chunk_id == b"fmt ":
+                    body = f.read(min(size, 40))
+                    if len(body) < 16:
+                        raise ValueError(f"Truncated 'fmt ' chunk in {wav_path}")
+                    fmt = {
+                        "format": int.from_bytes(body[0:2], "little"),
+                        "channels": int.from_bytes(body[2:4], "little"),
+                        "rate": int.from_bytes(body[4:8], "little"),
+                        "bits": int.from_bytes(body[14:16], "little"),
+                    }
+                    # Extensible: the real format code is the first two bytes of the sub-format GUID
+                    if fmt["format"] == WAVE_FORMAT_EXTENSIBLE and len(body) >= 26:
+                        fmt["format"] = int.from_bytes(body[24:26], "little")
+                elif chunk_id == b"data":
+                    if fmt is None:
+                        raise ValueError(f"'data' chunk before 'fmt ' in {wav_path}")
                     # Some recorders write 0 or an oversized length for still-open files: clamp to the file
                     if size == 0 or pos + 8 + size > file_size:
                         size = file_size - pos - 8
-                    return pos + 8, size
+                    return fmt, pos + 8, size
                 pos += 8 + size + (size & 1)  # chunks are word-aligned
         raise ValueError(f"No 'data' chunk found in {wav_path}")
 
@@ -320,7 +345,10 @@ def find_wav_file(specified: str | None = None) -> str:
     for c in candidates:
         if c and os.path.isfile(c):
             return os.path.abspath(c)
-    raise FileNotFoundError("Could not locate the WAV file. Please specify a valid path using --wav argument.")
+    raise FileNotFoundError(
+        "No IQ recording found. Pass a 16-bit stereo IQ WAV with --wav PATH (and --center-freq HZ); "
+        "recordings are not shipped in the repository, see README 'IQ recordings'."
+    )
 
 
 async def start_background_tasks(app):
@@ -392,13 +420,16 @@ def main():
     parser.add_argument("--center-freq", type=int, default=14048000, help="Center frequency in Hz (default: 14048000)")
     args = parser.parse_args()
 
-    wav_file = find_wav_file(args.wav)
     static_dir = Path(__file__).resolve().parent.parent / "app"
+    try:
+        wav_file = find_wav_file(args.wav)
+        app = create_app(wav_file, static_dir, args.center_freq)
+    except (FileNotFoundError, ValueError) as e:
+        logger.error(str(e))
+        sys.exit(2)
 
     logger.info(f"Serving static files from: {static_dir}")
     logger.info(f"didahSDR web server: http://localhost:{args.port}/")
-
-    app = create_app(wav_file, static_dir, args.center_freq)
     web.run_app(app, host=args.host, port=args.port)
 
 

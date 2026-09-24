@@ -1136,7 +1136,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function applySourcePresets(src, force) {
-        let seen = {};
+        let seen;
         try { seen = JSON.parse(localStorage.getItem('didah_presets_seen') || '{}') || {}; } catch (e) { seen = {}; }
         if (src.id === 'oh5ae' && seen.f4kiy && !seen.oh5ae) seen.oh5ae = 1;
         if (!force && seen[src.id]) return;
