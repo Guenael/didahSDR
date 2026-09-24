@@ -127,3 +127,16 @@ test('CW leaves a steady tone alone when the autonotch is enabled', () => {
     const rms = Math.sqrt(s / tail.length);
     assert.ok(rms > 0.05, `CW tail rms ${rms.toFixed(4)} should survive the autonotch`);
 });
+
+test('autonotch and NR are SSB-only: in CW they leave the audio untouched', () => {
+    const iq = floatIq(iqTone(2000, 96000, 96000, 0.2));
+    const plain = new DidahDemodulator(96000);
+    plain.configure({ offsetFreq: 2000, modulation: 'cw' });
+    const fx = new DidahDemodulator(96000);
+    fx.configure({ offsetFreq: 2000, modulation: 'cw' });
+    fx.setNrEnabled(true);
+    fx.setAutonotchEnabled(true);
+    const a = Float32Array.from(plain.process(iq));
+    const b = Float32Array.from(fx.process(iq));
+    assert.deepEqual(b, a);
+});

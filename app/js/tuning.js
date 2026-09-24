@@ -70,7 +70,7 @@ function createTuning(ctx) {
         if (state.tunedFreq < state.centerFreq - maxOff) state.tunedFreq = Math.round(state.centerFreq - maxOff);
         waterfall.panOffset = 0;
         if (state.qrssEnabled) {
-            waterfall.zoom = 1;
+            waterfall.zoom = qrss.viewZoom();
             waterfall.setCenterFreq(state.tunedFreq, qrss.outRate || 375);
         } else {
             waterfall.setCenterFreq(state.centerFreq, state.sampleRate);
@@ -165,7 +165,7 @@ function createTuning(ctx) {
         noteTuneReset(state.tunedFreq - prevTuned, state.modulation !== prevMod);
         if (state.qrssEnabled) {
             qrss.reset();
-            waterfall.zoom = 1;
+            waterfall.zoom = qrss.viewZoom();
             waterfall.panOffset = 0;
             waterfall.setCenterFreq(state.tunedFreq, qrss.outRate || 375);
             waterfall.clear();
@@ -206,6 +206,10 @@ function createTuning(ctx) {
         const ssbSec = document.getElementById('ssb-config-section');
         if (cwSec) cwSec.classList.toggle('is-dimmed', !cw);
         if (ssbSec) ssbSec.classList.toggle('is-dimmed', cw);
+        for (const id of ['autonotch-toggle', 'nr-toggle']) {   // SSB-only (demodulator.js)
+            const btn = document.getElementById(id);
+            if (btn) btn.classList.toggle('is-dimmed', cw);
+        }
 
         document.querySelectorAll('.mode-btn').forEach((btn) => {
             btn.classList.toggle('active', btn.dataset.mode === state.modulation);

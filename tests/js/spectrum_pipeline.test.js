@@ -105,7 +105,7 @@ test('QRSS replaces the wideband columns with its own narrow ones, and restores 
     pipeline.setQrssEnabled(true);
     assert.equal(ctx.state.qrssEnabled, true);
     assert.equal(typeof ctx.demodulator.qrssPush, 'function');
-    assert.equal(ctx.waterfall.zoom, 1);
+    assert.equal(ctx.waterfall.zoom, ctx.qrss.viewZoom());   // ~200 Hz view
     for (let p = 0; p < 80; p++) pipeline.processRawIQ(packet, PACKET);   // 2 s
     assert.ok(n.slices > 0, 'QRSS columns');
     assert.ok(n.slices < 20, `no wideband columns (${n.slices})`);

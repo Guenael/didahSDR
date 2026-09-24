@@ -123,8 +123,10 @@ class NlmsPredictor {
 }
 
 /**
- * 48 kHz design scaled in time. Under 24 kHz the notch step is small enough that
- * a 60 ms dit stays within 1 dB, while a carrier lasting a second or two is notched.
+ * The notch runs in USB/LSB only (the demodulator skips it in CW), at the ~12 kHz channel rate.
+ * 8 ms of taps and mu 0.005: a steady carrier is down ~35 dB within half a second, while
+ * voice loses ~2.5 dB (measured with gliding harmonics; the same loss as a much slower mu).
+ * The >= 24 kHz branch is the original 48 kHz design, kept for callers at that rate.
  */
 function notchParams(rate) {
     if (rate >= 24000) {
@@ -135,9 +137,9 @@ function notchParams(rate) {
         };
     }
     return {
-        taps: Math.max(24, Math.round(rate * 0.004)),
+        taps: Math.max(24, Math.round(rate * 0.008)),
         delay: Math.max(8, Math.round(rate * 0.001)),
-        mu: 0.0003
+        mu: 0.005
     };
 }
 

@@ -181,19 +181,24 @@ if (typeof module !== 'undefined') module.exports = { CWFrontend, CW_FRONTEND_SP
 
 /**
  * Greedy CTC collapse of log-probs [T, C] (flat Float32Array, row-major). `prev` is the last emitted
- * class carried across chunk boundaries (null = blank). Returns { text, prev }.
+ * class carried across chunk boundaries (null = blank). Returns { text, prev, frames }, where
+ * frames[k] is the step (0..T-1) at which text[k] was emitted.
  */
 function ctcGreedy(logProbs, T, C, chars, blank, prev = null) {
     let text = '';
+    const frames = [];
     for (let t = 0; t < T; t++) {
         const o = t * C;
         let best = 0, bv = logProbs[o];
         for (let c = 1; c < C; c++) if (logProbs[o + c] > bv) { bv = logProbs[o + c]; best = c; }
         if (best === blank) { prev = null; continue; }
-        if (best !== prev) text += chars[best];
+        if (best !== prev) {
+            text += chars[best];
+            frames.push(t);
+        }
         prev = best;
     }
-    return { text, prev };
+    return { text, prev, frames };
 }
 
 if (typeof module !== 'undefined') module.exports.ctcGreedy = ctcGreedy;

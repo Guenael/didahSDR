@@ -5,6 +5,7 @@ const vm = require('vm');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const { CW_FRONTEND_SPEC } = require('../../app/js/cw_frontend.js');
 const WORKER = fs.readFileSync(path.resolve(__dirname, '../../app/js/cw_decoder_worker.js'), 'utf8');
 
 function bootWorker() {
@@ -20,7 +21,8 @@ function bootWorker() {
         Float32Array,
         Object,
         Error,
-        setImmediate
+        setImmediate,
+        CW_FRONTEND_SPEC
     };
     box.global = box;
     box.self = box;
@@ -59,7 +61,8 @@ function bootWorker() {
     };
     box.ctcGreedy = (_data, _frames, _classes, _chars, _blank, prev) => ({
         prev: (prev || 0) + 1,
-        text: 'E'
+        text: 'E',
+        frames: [box.charFrame || 0]
     });
     box.fetch = async () => ({
         ok: true,
@@ -151,4 +154,17 @@ test('only frames lost to the ring move emitted forward', async () => {
     const c = box.copies[0];
     assert.equal(c.from, 1000);                     // oldest frame still in the ring
     assert.equal(box.tensors[0].dims[1], 51);       // no frames before it are invented
+});
+
+test('each step reports where its characters sit in the input and how far it has decoded', async () => {
+    const box = await bootReady(460);
+    box.charFrame = 7;
+    box.frontends[0].frameCount = 200;
+    await box.timerFn();                            // decodes frames 0..49
+    await box.timerFn();                            // decodes frames 50..99
+    const steps = box.messages.filter((m) => m.type === 'text');
+    const R = 12000 / 800;
+    const pos = (f) => Math.round((f * 8 + 32) * R);   // centre of frame f, in 12 kHz input samples
+    assert.deepEqual(steps.map((m) => m.at), [[pos(7)], [pos(57)]]);
+    assert.deepEqual(steps.map((m) => m.upTo), [pos(50), pos(100)]);
 });

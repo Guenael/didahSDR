@@ -64,6 +64,11 @@ class CWDecoder {
         this.onTap = (i, q, n) => this._tap(i, q, n);
         /** CWRecorder fed with the tap at the decoder rate; any reset ends its clip. */
         this.recorder = null;
+        /**
+         * Tap samples handed to the worker since its last reset: the same clock as the positions in the
+         * worker's 'text' messages, so REC can keep only the characters inside its clip.
+         */
+        this.tapPos = 0;
         /** Set when the model or onnxruntime files are not served (they are not in git). */
         this.missing = '';
     }
@@ -155,6 +160,9 @@ class CWDecoder {
     reset() {
         if (this.recorder) this.recorder.stop('reset');
         this.fill = 0;
+        this.tapPos = 0;
+        // Chunks not yet sent belong to the old station and would land after the worker's reset.
+        while (this.hold.length) this.pool.push(this.hold.shift());
         if (this._poly) this._poly.reset();
         if (this.worker) this.worker.postMessage({ type: 'reset' });
     }
@@ -176,6 +184,7 @@ class CWDecoder {
         this.fill = 0;
         this.made = 0;
         this.inFlight = 0;
+        this.tapPos = 0;   // the worker resets its frontend on a rate change
         this.epoch++;
     }
 
@@ -190,7 +199,10 @@ class CWDecoder {
             this.made++;
             return { i: new Float32Array(this.chunkSamples), q: new Float32Array(this.chunkSamples) };
         }
-        if (this.hold.length) return this.hold.shift();
+        if (this.hold.length) {
+            this.tapPos -= this.chunkSamples;   // the worker never sees it: keep the clocks aligned
+            return this.hold.shift();
+        }
         return null;
     }
 
@@ -222,14 +234,14 @@ class CWDecoder {
             i = this._poly.outI;
             q = this._poly.outQ;
         }
-        if (this.recorder) this.recorder.pushTap(i, q, n);
+        if (this.recorder) this.recorder.pushTap(i, q, n, this.tapPos);
         let p = 0;
         const samples = this.chunkSamples;
         while (p < n) {
             if (!this.cur) {
                 this.cur = this._takeBuffer();
                 this.fill = 0;
-                if (!this.cur) return;
+                if (!this.cur) break;
             }
             const room = samples - this.fill;
             const take = room < n - p ? room : n - p;
@@ -248,6 +260,7 @@ class CWDecoder {
                 this._drain();
             }
         }
+        this.tapPos += p;
     }
 
     _onMessage(m) {
@@ -259,7 +272,7 @@ class CWDecoder {
                 this._drain();
                 break;
             case 'text':
-                if (this.recorder) this.recorder.pushText(m.text);
+                if (this.recorder) this.recorder.pushText(m.text || '', m.at, m.upTo);
                 this._appendChunk(m.text || '');
                 break;
             case 'status':

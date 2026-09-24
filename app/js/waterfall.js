@@ -45,6 +45,7 @@ class HorizontalWaterfall {
         this.maxZoom = 24.0;
         this.panOffset = 0.0; // in Hz from center
         this.viewLock = false; // IC-7300: block click-tune and zoom; Shift-pan still tunes the radio
+        this.passbandTint = true; // reversed-colormap passband; off in QRSS, where the band fills the view
 
         // Interaction state
         this.dragMode = null;         // 'tune' | 'zoom' | 'pan' | 'bw'
@@ -416,8 +417,9 @@ class HorizontalWaterfall {
         gl.uniform1f(this.uniforms.u_freqTop, freqTop);
 
         const { lo, hi } = this.getPassbandEdges();
-        gl.uniform1f(this.uniforms.u_pbMin, (lo - fullMinFreq) / this.sampleRate);
-        gl.uniform1f(this.uniforms.u_pbMax, (hi - fullMinFreq) / this.sampleRate);
+        const noTint = 2.0;   // outside [0, 1]: no texel is in the passband
+        gl.uniform1f(this.uniforms.u_pbMin, this.passbandTint ? (lo - fullMinFreq) / this.sampleRate : noTint);
+        gl.uniform1f(this.uniforms.u_pbMax, this.passbandTint ? (hi - fullMinFreq) / this.sampleRate : noTint);
 
         const edgeX = (freqTop - freqBottom) / Math.max(1.0, this.wfHeight) * 1.5;
         gl.uniform1f(this.uniforms.u_edgeX, edgeX);

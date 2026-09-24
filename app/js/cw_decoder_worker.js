@@ -12,12 +12,22 @@
  * Messages in : { type:'init', rate, modelUrl, metaUrl, wasmPath }
  *               { type:'audio', i:Float32Array, q:Float32Array, n }   (buffers are returned via 'recycle')
  *               { type:'rate', rate }   { type:'reset' }
- * Messages out: { type:'status', state, detail? }   { type:'text', text }   { type:'recycle', i, q }
+ * Messages out: { type:'status', state, detail? }   { type:'recycle', i, q }
+ *               { type:'text', text, at, upTo } once per decode step (text may be empty). Positions are in
+ *               input samples since the last reset: at[k] is where text[k] sits in the audio (the centre of
+ *               its STFT frame), upTo is the end of the audio this step has decoded. REC uses them to keep
+ *               only the characters inside its clip.
  */
 
 importScripts('fft.js', 'demodulator.js', 'cw_frontend.js');
 
 const NEW_FRAMES = 50;     // one decode step; 50 × 10 ms ≈ 500 ms of new audio
+
+/** Input-sample position of the centre of frontend frame `f` (hop 8, 64-point frames at 800 Hz). */
+function framePos(f) {
+    const R = curRate / CW_FRONTEND_SPEC.complexRate;
+    return Math.round((f * CW_FRONTEND_SPEC.hop + CW_FRONTEND_SPEC.nfft / 2) * R);
+}
 const INFER_POLL_MS = 100;
 
 let ortRt = null;
@@ -110,8 +120,9 @@ async function infer() {
         const from = ctx * numClasses;
         const r = ctcGreedy(lp.subarray(from, from + NEW_FRAMES * numClasses), NEW_FRAMES, numClasses, chars, blank, prev);
         prev = r.prev;
+        const at = (r.frames || []).map((t) => framePos(emitted + t));
         emitted += NEW_FRAMES;
-        if (r.text) postMessage({ type: 'text', text: r.text });
+        postMessage({ type: 'text', text: r.text, at, upTo: framePos(emitted) });
     } catch (e) {
         status('error', String(e && e.message || e));
         clearInterval(timer); timer = null;

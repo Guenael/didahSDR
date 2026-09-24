@@ -1,20 +1,24 @@
 /**
  * didahSDR - QRSS spectrum.
  *
- * Complex baseband at the channel rate, already centred on the tuned frequency
- * and taken before the channel FIR, is decimated by halfbands to about 375 Hz.
- * A long Hann FFT then gives bins of a fraction of a hertz. Columns are emitted
- * every `hop` decimated samples (the waterfall scroll). `avgTarget` is the
- * exponential average, in columns, once the window is full.
+ * Complex baseband at the channel rate, already centred on the tuned frequency and taken before the
+ * channel FIR, is decimated by halfbands to about 375 Hz. A long 4-term Blackman-Harris FFT then gives
+ * sub-hertz bins with ~90 dB sidelobe rejection. Frames overlap by 75 % (hop = N / 4), so each column
+ * is a fresh spectrum and a keyed carrier prints as a line whose edges are only one window long.
+ * No averaging between columns: that is what smeared dits into blocks.
  */
+
+/** FFT length per WF Speed (1..8): 22 s windows (QRSS60) down to 0.7 s (fast DFCW). */
+const QRSS_SIZES = [8192, 4096, 2048, 1024, 512, 256, 256, 256];
+/** Visible span of the QRSS view, Hz (the decimated band is ~375 Hz wide). */
+const QRSS_VIEW_HZ = 200;
 
 class QrssSpectrum {
     constructor() {
         this.inRate = 0;
         this.outRate = 0;
         this.fftSize = 4096;
-        this.avgTarget = 1;
-        this.hop = 4096;
+        this.hop = 1024;
         this.hbs = [];
         this.fills = [];
         this.blockR = new Float32Array(8192);
@@ -24,11 +28,8 @@ class QrssSpectrum {
         this.filled = 0;
         this.since = 0;
         this.fft = new DidahFFT(this.fftSize);
-        this.fft.initWindow('hann');
-        this.acc = new Float32Array(this.fftSize);
+        this.fft.initWindow('bh4');
         this.spec = new Float32Array(this.fftSize);
-        this.accN = 0;
-        this.ready = false;
     }
 
     setInputRate(rate) {
@@ -49,32 +50,28 @@ class QrssSpectrum {
         this.reset();
     }
 
+    /** 256..8192 points (power of two). The hop follows at N / 4. */
     setFftSize(n) {
-        let size = 1024;
-        if (n >= 8192) size = 8192;
-        else if (n >= 4096) size = 4096;
-        else if (n >= 2048) size = 2048;
+        let size = 256;
+        while (size < 8192 && size * 2 <= n) size *= 2;
         if (size === this.fftSize) return;
         this.fftSize = size;
         this.fft.setSize(size);
-        this.fft.initWindow('hann');
-        this.acc = new Float32Array(size);
+        this.fft.initWindow('bh4');
         this.spec = new Float32Array(size);
-        if (this.hop > size) this.hop = size;
+        this.hop = size >> 2;
         this.filled = 0;
         this.since = 0;
-        this.accN = 0;
-        this.ready = false;
     }
 
-    /** New decimated samples between columns. Smaller than the FFT, so the trace scrolls. */
+    /** New decimated samples between columns (normally N / 4). */
     setHop(n) {
-        const hop = Math.max(1, Math.min(this.fftSize, n | 0));
-        this.hop = hop;
+        this.hop = Math.max(1, Math.min(this.fftSize, n | 0));
     }
 
-    setAverage(n) {
-        this.avgTarget = Math.max(1, n | 0);
+    /** Waterfall zoom that shows QRSS_VIEW_HZ of the decimated band. */
+    viewZoom() {
+        return this.outRate > QRSS_VIEW_HZ ? this.outRate / QRSS_VIEW_HZ : 1;
     }
 
     reset() {
@@ -85,14 +82,11 @@ class QrssSpectrum {
         }
         this.filled = 0;
         this.since = 0;
-        this.accN = 0;
-        this.ready = false;
-        this.acc.fill(0);
     }
 
     /**
      * One complex sample at the channel rate.
-     * @returns {Float32Array|null} a dB column when Welch averaging has finished
+     * @returns {Float32Array|null} a dB column (fftshifted) every `hop` decimated samples
      */
     push(i, q) {
         let si = i;
@@ -133,7 +127,7 @@ class QrssSpectrum {
 
     /**
      * One fftshifted dB column. Until the window is full the samples sit in the
-     * middle of the Hann window (the wings are zero) so a carrier is visible
+     * middle of the window (the wings are zero) so a carrier is visible
      * immediately and then tightens to the real bin width.
      */
     _column(n) {
@@ -155,33 +149,14 @@ class QrssSpectrum {
             }
             db = this.fft.computeSpectrumDb(fr, fi, true);
         }
-        const spec = this.spec;
-        const mag = this.fft.mag2Buffer;
-        if (m < n) {
-            for (let k = 0; k < n; k++) spec[k] = db[k];
-            this.ready = true;
-            return spec;
-        }
-        const acc = this.acc;
-        if (this.accN === 0) {
-            for (let k = 0; k < n; k++) {
-                acc[k] = mag[k];
-                spec[k] = db[k];
-            }
-            this.accN = 1;
-        } else {
-            const a = 1.0 / this.avgTarget;
-            for (let k = 0; k < n; k++) {
-                const p = acc[k] + a * (mag[k] - acc[k]);
-                acc[k] = p;
-                mag[k] = p;
-                spec[k] = 10.0 * Math.log10(p > 1e-15 ? p : 1e-15);
-            }
-        }
-        this.ready = true;
-        return spec;
+        this.spec.set(db.subarray(0, n));
+        return this.spec;
     }
 }
 
-if (typeof globalThis !== 'undefined') globalThis.QrssSpectrum = QrssSpectrum;
-if (typeof module !== 'undefined') module.exports = { QrssSpectrum };
+if (typeof globalThis !== 'undefined') {
+    globalThis.QrssSpectrum = QrssSpectrum;
+    globalThis.QRSS_SIZES = QRSS_SIZES;
+    globalThis.QRSS_VIEW_HZ = QRSS_VIEW_HZ;
+}
+if (typeof module !== 'undefined') module.exports = { QrssSpectrum, QRSS_SIZES, QRSS_VIEW_HZ };

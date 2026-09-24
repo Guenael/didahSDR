@@ -1101,6 +1101,11 @@ kbd {
     opacity: 0.4;
 }
 
+/* SSB-only audio FX (autonotch, NR) while in CW */
+.toggle-btn.is-dimmed {
+    opacity: 0.45;
+}
+
 /* Source window: IQ catalog radios */
 .source-window {
     width: 420px;

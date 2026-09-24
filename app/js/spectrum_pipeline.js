@@ -27,22 +27,12 @@ function createSpectrumPipeline(ctx) {
     let qrssPlanSpeed = -1;
     let qrssSavedView = null;
 
-    function qrssPlan() {
-        const speed = Math.max(1, Math.min(8, state.speedMultiplier | 0));
-        const sizes = [8192, 8192, 4096, 4096, 2048, 2048, 1024, 1024];
-        const out = qrss.outRate > 0 ? qrss.outRate : 375;
-        return {
-            fftSize: sizes[speed - 1],
-            average: 9 - speed,
-            hop: Math.max(1, Math.round(out / speed))
-        };
-    }
-
+    /** WF Speed picks the QRSS window: 1 = 22 s (sub-0.1 Hz bins) ... 8 = 0.7 s. Hop is N / 4. */
     function applyQrssPlan() {
-        const plan = qrssPlan();
-        if (qrss.fftSize !== plan.fftSize) qrss.setFftSize(plan.fftSize);
-        if (qrss.avgTarget !== plan.average) qrss.setAverage(plan.average);
-        if (qrss.hop !== plan.hop) qrss.setHop(plan.hop);
+        const speed = Math.max(1, Math.min(8, state.speedMultiplier | 0));
+        const size = QRSS_SIZES[speed - 1];
+        if (qrss.fftSize !== size) qrss.setFftSize(size);
+        qrss.setHop(size >> 2);
         qrssPlanSpeed = state.speedMultiplier;
     }
 
@@ -123,8 +113,9 @@ function createSpectrumPipeline(ctx) {
         if (qrssPlanSpeed !== state.speedMultiplier) applyQrssPlan();
         const spec = qrss.push(i, q);
         if (!spec || !state.qrssEnabled) return;
-        const shown = state.filterEnabled ? cwFilter.process(spec) : spec;
-        waterfall.addSlice(shown);
+        // No CW filter here: its per-bin IIR smooths across columns (seconds apart in QRSS) and its
+        // sharpening kernel is sized for wideband bins, not 0.1 Hz ones.
+        waterfall.addSlice(spec);
         smeter.updateFromSpectrum(
             qrss.fft.mag2Buffer, qrss.outRate, state.tunedFreq, state.tunedFreq,
             state.modulation, state.cwBandwidth, qrss.fft.enbw, qrss.hop
@@ -144,7 +135,7 @@ function createSpectrumPipeline(ctx) {
     function applyQrssView() {
         qrss.setInputRate(demodulator.audioRate);
         applyQrssPlan();
-        waterfall.zoom = 1;
+        waterfall.zoom = qrss.viewZoom();
         waterfall.panOffset = 0;
         waterfall.setCenterFreq(state.tunedFreq, qrss.outRate || 375);
         waterfall.setTunedFreq(state.tunedFreq, state.lowCut, state.highCut, state.modulation);
@@ -154,6 +145,7 @@ function createSpectrumPipeline(ctx) {
         const next = !!on;
         if (next === state.qrssEnabled) return;
         state.qrssEnabled = next;
+        waterfall.passbandTint = !next;
         if (next) {
             qrssSavedView = { zoom: waterfall.zoom, pan: waterfall.panOffset };
             demodulator.qrssPush = onQrssSample;

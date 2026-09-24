@@ -212,18 +212,39 @@ test('NR at 12 kHz drops channel-filtered noise by at least 3 dB', () => {
     assert.ok(db >= 3, `NR ${db.toFixed(1)} dB`);
 });
 
-test('autonotch at 12 kHz attenuates a 60 ms dit by less than 1 dB', () => {
+test('autonotch at 12 kHz (SSB): a carrier is notched within half a second, a voice survives', () => {
     const rate = 12000;
-    const dit = Math.round(rate * 0.06);
-    const buf = new Float32Array(rate);
-    const w = (2 * Math.PI * 700) / rate;
-    for (let i = 0; i < dit; i++) buf[i] = 0.2 * Math.sin(w * i);
-    const bodyIn = rms(buf, Math.round(dit * 0.4), dit);
-    const n = new DidahAutoNotch(rate);
-    n.setEnabled(true);
-    n.setDepth(100);
-    n.process(buf, buf.length);
-    const bodyOut = rms(buf, Math.round(dit * 0.4), dit);
-    const db = 20 * Math.log10(bodyIn / Math.max(bodyOut, 1e-12));
-    assert.ok(db < 1, `dit attenuation ${db.toFixed(2)} dB`);
+    const n = rate * 3;
+    // voice-like: harmonics of a gliding pitch, 4 Hz syllables
+    const voice = new Float32Array(n);
+    let ph = 0;
+    for (let i = 0; i < n; i++) {
+        const f0 = 140 + 60 * Math.sin(2 * Math.PI * 0.7 * i / rate);
+        ph += 2 * Math.PI * f0 / rate;
+        const env = Math.max(0, Math.sin(2 * Math.PI * 4 * i / rate));
+        let s = 0;
+        for (let h = 1; h <= 15; h++) s += Math.sin(h * ph) / h;
+        voice[i] = 0.08 * env * s;
+    }
+    const carrierAt = (x, from, to) => {
+        const w = 2 * Math.PI * 1000 / rate;
+        let re = 0, im = 0;
+        for (let i = from; i < to; i++) { re += x[i] * Math.cos(w * i); im -= x[i] * Math.sin(w * i); }
+        return Math.hypot(re, im) / (to - from) * 2;
+    };
+    const mix = Float32Array.from(voice, (v, i) => v + 0.05 * Math.sin(2 * Math.PI * 1000 * i / rate));
+    const notch = new DidahAutoNotch(rate);
+    notch.setEnabled(true);
+    notch.setDepth(100);
+    notch.process(mix, n);
+    const carrierDb = 20 * Math.log10(carrierAt(mix, rate * 0.4, rate * 0.6) / 0.05);
+    assert.ok(carrierDb < -25, `carrier at 0.5 s ${carrierDb.toFixed(1)} dB`);
+
+    const alone = Float32Array.from(voice);
+    const n2 = new DidahAutoNotch(rate);
+    n2.setEnabled(true);
+    n2.setDepth(100);
+    n2.process(alone, n);
+    const lossDb = 20 * Math.log10(rms(voice, rate, n) / rms(alone, rate, n));
+    assert.ok(lossDb < 3.5, `voice loss ${lossDb.toFixed(1)} dB`);
 });

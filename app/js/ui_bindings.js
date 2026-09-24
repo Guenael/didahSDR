@@ -26,7 +26,8 @@ function bindUi(ctx) {
         if (!recBtn) return;
         const on = cwRecorder.recording;
         const s = Math.floor(cwRecorder.seconds);
-        recBtn.textContent = on ? `● ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : 'REC';
+        recBtn.textContent = on ? `● ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+            : cwRecorder.draining ? 'SAVING' : 'REC';   // waiting for the decode of the clip's last second
         recBtn.classList.toggle('recording', on);
         recBtn.disabled = !on && !cwDecoder.active;
         if (recNoiseBtn) {
@@ -39,7 +40,7 @@ function bindUi(ctx) {
     cwRecorder.onStop = (clip) => { saveRecording(clip); updateRecUi(); };
 
     function toggleRec() {
-        if (cwRecorder.recording) { cwRecorder.stop('user'); return; }
+        if (cwRecorder.recording) { cwRecorder.stop('user'); updateRecUi(); return; }
         if (!cwDecoder.active) return;
         const source = src();
         cwRecorder.start({

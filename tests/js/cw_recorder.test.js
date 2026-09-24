@@ -100,3 +100,42 @@ test('decoder reset and stop end the clip', () => {
     }
     assert.deepEqual(reasons, ['reset', 'decoder off']);
 });
+
+test('hyp keeps only the characters decoded from inside the clip, and waits for the tail', () => {
+    let got = null;
+    const rec = new CWRecorder({ onStop: (c) => { got = c; } });
+    rec.start({ rate: 12000, audioRate: 12000, carrierHz: 7030000 });
+    const z = new Float32Array(12000);
+    rec.pushTap(z, z, 12000, 50000);                     // the clip is tap samples [50000, 62000)
+    rec.pushText('OLD ', [40000, 42000, 44000, 49999]);  // decoded late, but from before REC
+    rec.pushText('CQ', [51000, 53000], 55000);
+    assert.equal(rec.stop('user'), null);               // the decoder is ~1 s behind: wait
+    assert.equal(rec.draining, true);
+    assert.equal(got, null);
+    rec.pushText(' DE', [60000, 61000, 61500], 61000);   // still short of the clip's end
+    assert.equal(got, null);
+    rec.pushText(' AFTER', [62000, 62500, 63000, 63500, 64000, 64500], 67000);
+    assert.ok(got, 'saved once the decode passed the end of the clip');
+    assert.equal(got.sidecar.hyp, 'CQ DE');
+    assert.equal(got.sidecar.stop_reason, 'user');
+    assert.equal(rec.draining, false);
+});
+
+test('a draining clip is saved on timeout, and a reset saves it at once', async () => {
+    const saved = [];
+    const rec = new CWRecorder({ onStop: (c) => saved.push(c.sidecar.hyp), drainMs: 20 });
+    const z = new Float32Array(100);
+    rec.start({ rate: 12000, audioRate: 12000, carrierHz: 0 });
+    rec.pushTap(z, z, 100, 0);
+    rec.pushText('K', [10], 50);
+    rec.stop('user');
+    await new Promise((r) => setTimeout(r, 40));
+    assert.deepEqual(saved, ['K']);
+
+    rec.start({ rate: 12000, audioRate: 12000, carrierHz: 0 });
+    rec.pushTap(z, z, 100, 1000);
+    rec.stop('user');
+    rec.stop('reset');                                   // decoder reset: no tail will come
+    assert.equal(saved.length, 2);
+    assert.equal(rec.draining, false);
+});
