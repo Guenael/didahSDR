@@ -2,13 +2,14 @@
  * didahSDR - CW decoder front end (streaming). Mirrors training/didahcw/frontend.py exactly;
  * the contract is training/spec/didahcw_frontend.json and a fixture test enforces parity.
  *
- *   complex baseband (post channel filter, pre BFO/AGC) at 48 kHz or 12 kHz
+ *   complex baseband (post channel filter, pre BFO/AGC) at the decoder rate (a multiple of 800 Hz, ~12 kHz)
  *     -> polyphase Kaiser FIR decimator to 800 Hz complex
  *     -> 64-pt periodic-Hann STFT, hop 8 (10 ms), fftshift, 33 centre bins (±200 Hz)
  *     -> ln(|X| + 1e-6) minus an EMA of the per-frame median (noise floor)
  *
- * Runs inside cw_decoder_worker.js (importScripts) and in Node for tests. Needs `designLowpass`
- * and `ComplexFIR` (demodulator.js) and `DidahFFT` (fft.js) as globals. No allocations after construction.
+ * Runs inside cw_decoder_worker.js (importScripts) and in Node for tests. Needs `kaiserNumTaps`,
+ * `designLowpass` and `ComplexFIR` (demodulator.js, same formulas as didahcw/dsp.py) and `DidahFFT`
+ * (fft.js) as globals. No allocations after construction.
  */
 
 const CW_FRONTEND_SPEC = {
@@ -22,16 +23,8 @@ const CW_FRONTEND_SPEC = {
     binOffset: 16,
     logEps: 1e-6,
     floorAlpha: 0.005,
-    leftContextFrames: 511,
-    lookaheadFrames: 50,
+    // Context and lookahead are model properties: the worker reads them from models/didahcw.onnx.json.
 };
-
-/** Odd Kaiser tap count for the given attenuation and transition width (same formula as dsp.py). */
-function kaiserNumTaps(attenDb, transitionHz, fs) {
-    const dw = (2.0 * Math.PI * transitionHz) / fs;
-    const n = Math.ceil((attenDb - 8.0) / (2.285 * dw)) + 1;
-    return n % 2 === 1 ? n : n + 1;
-}
 
 class CWFrontend {
     /**
@@ -184,7 +177,7 @@ class CWFrontend {
     }
 }
 
-if (typeof module !== 'undefined') module.exports = { CWFrontend, CW_FRONTEND_SPEC, kaiserNumTaps };
+if (typeof module !== 'undefined') module.exports = { CWFrontend, CW_FRONTEND_SPEC };
 
 /**
  * Greedy CTC collapse of log-probs [T, C] (flat Float32Array, row-major). `prev` is the last emitted

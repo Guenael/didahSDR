@@ -4,7 +4,8 @@
   "description": "Development tooling only (lint, tests). The app itself (app/) has no npm dependencies and no build step.",
   "license": "AGPL-3.0-or-later",
   "scripts": {
-    "lint": "eslint app/js tests eslint.config.js",
+    "lint": "eslint app/js tests scripts eslint.config.js",
+    "bench": "node scripts/bench.js",
     "test": "node --test tests/js/"
   },
   "devDependencies": {

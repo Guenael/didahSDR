@@ -26,10 +26,6 @@ function cwTokenClass(tok) {
     return 'cwd-plain';
 }
 
-function escapeHtml(s) {
-    return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-}
-
 /**
  * Fold `chunk` onto the unfinished word. Completed words are `words` (an empty
  * string is a repeated space). `pending` is the tail that may still grow.
@@ -38,14 +34,6 @@ function cwConsumeText(pending, chunk) {
     const parts = (pending + chunk).split(' ');
     const next = parts.pop();
     return { words: parts, pending: next };
-}
-
-/** Completed words become spans; the trailing partial word stays plain (it may still grow). */
-function cwHighlightHtml(text) {
-    const parts = text.split(' ');
-    const tail = parts.pop();
-    const done = parts.map((w) => (w ? `<span class="${cwTokenClass(w)}">${escapeHtml(w)}</span>` : '')).join(' ');
-    return done + (parts.length ? ' ' : '') + `<span class="cwd-pending">${escapeHtml(tail)}</span>`;
 }
 
 class CWDecoder {
@@ -350,4 +338,4 @@ class CWDecoder {
     }
 }
 
-if (typeof module !== 'undefined') module.exports = { CWDecoder, cwTokenClass, cwHighlightHtml, cwConsumeText, CW_HIGHLIGHT };
+if (typeof module !== 'undefined') module.exports = { CWDecoder, cwTokenClass, cwConsumeText, CW_HIGHLIGHT };

@@ -23,7 +23,7 @@ const RTL_CIC_GAIN = 32768; // R^N = 8^5
 const RTL_IQ_SCALE = 96;
 const RTL_BULK_BYTES = 65536;
 
-/** Inverse-sinc for a CIC N=5, R=8, M=1, DC gain 1. Flat to about 0.1 dB through ±80 kHz. */
+/** Inverse-sinc for a CIC N=5, R=8, M=1, DC gain 1. Flat to about 0.1 dB through ±80 kHz. Symmetric (folded). */
 const RTL_CIC_COMP = new Float64Array([
     0.00038248, -0.00037140, 0.00024573, 0.00012103, -0.00094322, 0.00252426,
     -0.00524501, 0.00953782, -0.01584675, 0.02457522, -0.03602393, 0.05032194,
@@ -65,12 +65,6 @@ const RTL_USB_FILTERS = [
  */
 function rtlNominalHz(displayHz, upconverterHz) {
     return Math.round(Number(displayHz) + RTL_FS4_HZ + (Number(upconverterHz) || 0));
-}
-
-/** Effective LO after the crystal PPM correction. */
-function rtlHardwareHz(displayHz, ppm, upconverterHz) {
-    const nominal = rtlNominalHz(displayHz, upconverterHz);
-    return Math.round(nominal * (1 + (Number(ppm) || 0) / 1e6));
 }
 
 /**
@@ -159,8 +153,9 @@ class RtlDecimator {
         this.dQ5 = 0;
         this.decimIndex = 0;
         this.mixPhase = 0;
-        this.firI = new Float64Array(RTL_CIC_COMP.length);
-        this.firQ = new Float64Array(RTL_CIC_COMP.length);
+        // Double-length history so the 49-tap window is contiguous and the symmetric taps fold.
+        this.firI = new Float64Array(2 * RTL_CIC_COMP.length);
+        this.firQ = new Float64Array(2 * RTL_CIC_COMP.length);
         this.firPos = 0;
     }
 
@@ -234,16 +229,22 @@ class RtlDecimator {
             prev = this.dQ4; this.dQ4 = vQ; vQ = (vQ - prev) | 0;
             prev = this.dQ5; this.dQ5 = vQ; vQ = (vQ - prev) | 0;
 
+            // Window is b[pos+1 .. pos+len], newest last. taps[t] == taps[len-1-t], so each pair
+            // of samples shares one multiply: 25 instead of 49 per output.
             const pos = this.firPos;
-            this.firI[pos] = vI;
-            this.firQ[pos] = vQ;
-            let accI = 0;
-            let accQ = 0;
-            let k = pos;
-            for (let t = 0; t < len; t++) {
-                accI += this.firI[k] * taps[t];
-                accQ += this.firQ[k] * taps[t];
-                k = k === 0 ? len - 1 : k - 1;
+            const bI = this.firI;
+            const bQ = this.firQ;
+            bI[pos] = bI[pos + len] = vI;
+            bQ[pos] = bQ[pos + len] = vQ;
+            const newest = pos + len;
+            const oldest = pos + 1;
+            const mid = (len - 1) >> 1;
+            let accI = taps[mid] * bI[newest - mid];
+            let accQ = taps[mid] * bQ[newest - mid];
+            for (let t = 0; t < mid; t++) {
+                const h = taps[t];
+                accI += h * (bI[newest - t] + bI[oldest + t]);
+                accQ += h * (bQ[newest - t] + bQ[oldest + t]);
             }
             this.firPos = pos + 1 === len ? 0 : pos + 1;
 
@@ -1126,7 +1127,7 @@ class RtlSdrSource {
 if (typeof module !== 'undefined') {
     module.exports = {
         RTL_CAPTURE_RATE, RTL_IQ_RATE, RTL_FS4_HZ, RTL_DECIM, RTL_XTAL_HZ, RTL_CIC_COMP,
-        rtlNominalHz, rtlHardwareHz, rtlUsesPll, rtlApplyCenter, RtlDecimator, RtlSdrSource,
+        rtlNominalHz, rtlUsesPll, rtlApplyCenter, RtlDecimator, RtlSdrSource,
         rtlNumberToBytes, rtlUsbMatch, rtlPickDevice, rtlPllPlan
     };
 }

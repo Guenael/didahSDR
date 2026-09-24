@@ -4,29 +4,19 @@ const assert = require('node:assert/strict');
 require('./load.js');
 
 const AUDIO = 48000;
-const IQ = 96000;
-const PACKET_S = 0.025;
 
-function renderSeconds(keyer, seconds, bfo = 700, iqOff = 1000) {
-    const nAudio = Math.round(AUDIO * PACKET_S);
-    const nIq = Math.round(IQ * PACKET_S);
+/** Keying envelope straight from tick(), one value per audio sample. */
+function renderSeconds(keyer, seconds) {
+    keyer.audioRate = AUDIO;
     const nTotal = Math.round(AUDIO * seconds);
     const env = new Float32Array(nTotal);
-    let o = 0;
     let keyedSamples = 0;
     let txSamples = 0;
-    while (o < nTotal) {
-        keyer.render(nAudio, AUDIO, nIq, IQ, bfo, iqOff);
-        const take = Math.min(nAudio, nTotal - o);
-        const ratio = nIq / nAudio;
-        for (let i = 0; i < take; i++) {
-            const iq = Math.min(nIq - 1, Math.round(i * ratio));
-            const mag = Math.hypot(keyer.iqI[iq], keyer.iqQ[iq]);
-            env[o + i] = mag;
-            if (mag > 0.05) keyedSamples++;
-        }
-        if (keyer.isTx()) txSamples += take;
-        o += take;
+    for (let o = 0; o < nTotal; o++) {
+        const e = keyer.tick();
+        env[o] = e;
+        if (e > 0.05) keyedSamples++;
+        if (keyer.isTx()) txSamples++;
     }
     return { env, keyedSamples, txSamples };
 }
@@ -150,14 +140,21 @@ test('sanitizeTxText uppercases, strips accents, and blanks unknown glyphs', () 
     assert.equal(morseOf('~'), '');
 });
 
-test('IQ oscillator is non-zero while keyed and silent in the gaps', () => {
+test('render() keys a sidetone at the requested pitch into audioOut', () => {
     const k = new CwKeyer();
     k.setWpm(20);
     k.setPaddle('dit', true);
-    const nAudio = Math.round(AUDIO * PACKET_S);
-    const nIq = Math.round(IQ * PACKET_S);
-    k.render(nAudio, AUDIO, nIq, IQ, 700, 2000);
-    let peak = 0;
-    for (let i = 0; i < nIq; i++) peak = Math.max(peak, Math.hypot(k.iqI[i], k.iqQ[i]));
-    assert.ok(peak > 0.1, `IQ peak ${peak}`);
+    const n = 1200;
+    k.render(n, AUDIO, 700);
+    const a = k.audioOut;
+    assert.equal(a.length, n);
+    assert.equal(k.isKeyed(), true);
+    let peak = 0, crossings = 0;
+    for (let i = 1; i < n; i++) {
+        peak = Math.max(peak, Math.abs(a[i]));
+        if ((a[i - 1] < 0) !== (a[i] < 0)) crossings++;
+    }
+    assert.ok(peak > 0.3, `peak ${peak}`);
+    // 700 Hz over 25 ms is ~17.5 cycles, ~35 zero crossings
+    assert.ok(Math.abs(crossings - 35) <= 3, `crossings ${crossings}`);
 });

@@ -13,7 +13,7 @@ class DidahConnection {
         this.iqBuf = new Int16Array(0);   // reused receive buffer, reallocated only if the packet size changes
 
         // Callback hooks
-        this.onRawIQ = options.onRawIQ || null;             // (Int16Array) => void (0x03 raw binary)
+        this.onRawIQ = options.onRawIQ || null;             // (Float32Array interleaved ±1, nComplex) => void
         this.onConfig = options.onConfig || null;           // (configObj) => void
         this.onStatusChange = options.onStatusChange || null; // (statusStr, isConnected) => void
     }
@@ -115,7 +115,6 @@ class DidahConnection {
             if (msg.type === 'config' && this.onConfig) {
                 this.onConfig(msg.value);
             }
-            // 'modes' is sent by the server for protocol compatibility; the client uses its own mode table.
         } catch (e) {
             console.warn('Non-JSON text message received:', text);
         }

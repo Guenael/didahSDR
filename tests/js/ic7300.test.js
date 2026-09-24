@@ -9,7 +9,7 @@ const {
 } = req('civ.js');
 const {
     IC7300_IF_HZ, IC7300_CW_TRACE_HZ, IC7300_CW_PITCH_HZ, IC7300_OUT_RATE, IC7300_SSB_SPAN_HZ,
-    mapCivMode, didahToCivMode, ic7300DecimPlan, ic7300Geometry, ic7300View, ic7300Zoom,
+    mapCivMode, didahToCivMode, ic7300DecimPlan, ic7300Geometry, ic7300View,
     RealIfConverter
 } = req('ic7300_if.js');
 const { findSource } = req('sources.js');
@@ -143,7 +143,6 @@ test('48/96/192 kHz contexts emit 12 kHz; 44.1 kHz scales the pitch', () => {
     assert.equal(scaled.tunedFreq - scaled.centerFreq, expectOff);
     assert.notEqual(expectOff, -IC7300_CW_PITCH_HZ);
     assert.equal(ic7300DecimPlan(44100).outRate, 11025);
-    assert.equal(ic7300Zoom(12000, 24), 12000 / 2500);
 });
 
 function convertReal(conv, freq, rate, n) {

@@ -79,7 +79,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateRecUi();
     }
 
-    // REC: dataset clip at the decoder tap (REC-BUTTON.md). Any decoder reset / stop ends the clip.
+    // REC: dataset clip at the decoder tap (docs/recording.md). Any decoder reset / stop ends the clip.
     const cwRecorder = new CWRecorder({ onStop: (clip) => { saveRecording(clip); updateRecUi(); } });
     cwDecoder.recorder = cwRecorder;
     const recBtn = document.getElementById('decoder-rec-btn');
@@ -892,7 +892,7 @@ document.addEventListener('DOMContentLoaded', () => {
             tuneIc7300FromUser(state.ic7300RadioHz + deltaHz);
             return;
         }
-        if (source.protocol === 'kiwi' || source.protocol === 'rtlsdr') {
+        if (sourcePolicy(source.protocol).followsDial) {
             const next = Math.round(state.centerFreq + deltaHz);
             shiftCenter(next);
             if (source.protocol === 'kiwi' && kiwi && kiwi.connected) kiwi.tune(state.centerFreq);
@@ -954,7 +954,7 @@ document.addEventListener('DOMContentLoaded', () => {
             valueDial.setValue(dialHz, false);
         }
 
-        if (source.protocol === 'kiwi' || source.protocol === 'rtlsdr') {
+        if (sourcePolicy(source.protocol).followsDial) {
             const half = state.sampleRate / 2;
             if (Math.abs(state.tunedFreq - state.centerFreq) > half - 50) {
                 shiftCenter(state.tunedFreq);
@@ -1061,11 +1061,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateSourceStatus() {
         const el = document.getElementById('source-status');
         if (!el) return;
-        const proto = source.protocol === 'kiwi' ? 'KiwiSDR SND IQ'
-            : source.protocol === 'soundcard' ? 'Sound card IQ'
-            : source.protocol === 'ic7300' ? 'IC-7300 IF'
-            : source.protocol === 'rtlsdr' ? 'RTL-SDR IQ'
-            : 'didah 0x03 IQ';
+        const proto = sourcePolicy(source.protocol).label;
         const khz = state.sampleRate / 1000;
         const srTxt = `${Number.isInteger(khz) ? khz : khz.toFixed(2)} kHz`;
         const cf = formatCenter(state.centerFreq);

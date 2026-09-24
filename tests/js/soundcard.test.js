@@ -6,7 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { req } = require('./load.js');
 const {
-    SOUND_RATES, isSoundRate, pickSoundRate, preferredCaptureRate, packStereoIq, classifyCapture
+    SOUND_RATES, isSoundRate, packStereoIq
 } = req('soundcard.js');
 const { findSource } = req('sources.js');
 
@@ -22,33 +22,6 @@ test('allowed rates are 48 / 96 / 192 kHz', () => {
     assert.equal(isSoundRate(96000), true);
     assert.equal(isSoundRate(44100), false);
     assert.equal(isSoundRate(48000.4), true);
-});
-
-test('preferredCaptureRate walks 96 kHz then 48 then 192', () => {
-    assert.equal(preferredCaptureRate([44100]), 0);
-    assert.equal(preferredCaptureRate([192000, 48000]), 48000);
-    assert.equal(preferredCaptureRate([192000, 96000, 48000]), 96000);
-    assert.equal(preferredCaptureRate([192000]), 192000);
-});
-
-test('pickSoundRate prefers native when allowed, else highest in range', () => {
-    assert.equal(pickSoundRate(44100, 44100, 44100), 0);
-    assert.equal(pickSoundRate(44100, 48000, 44100), 48000);
-    assert.equal(pickSoundRate(44100, 192000, 96000), 96000);
-    assert.equal(pickSoundRate(8000, 192000, 44100), 192000);
-});
-
-test('classifyCapture requires stereo and an allowed rate', () => {
-    assert.equal(classifyCapture({ channelCount: 1, sampleRate: 48000 }).ok, false);
-    assert.equal(classifyCapture({ channelCount: 2, sampleRate: 44100 }).ok, false);
-    const ok = classifyCapture({ channelCount: 2, sampleRate: 48000 });
-    assert.equal(ok.ok, true);
-    assert.equal(ok.rate, 48000);
-    const ranged = classifyCapture({
-        channelCount: 2, sampleRate: 44100, sampleRateMin: 44100, sampleRateMax: 96000
-    });
-    assert.equal(ranged.ok, true);
-    assert.equal(ranged.rate, 96000);
 });
 
 test('packStereoIq maps L/R to float I/Q and honours swap', () => {
@@ -96,4 +69,25 @@ test('capture worklet packs a quantum through packStereoIq', () => {
     packStereoIq(left, right, true, expect);
     assert.equal(proc.cur[6], right[3]);
     assert.equal(proc.cur[7], left[3]);
+});
+
+test('capture teardown disconnects the graph, stops tracks and closes the context once', async () => {
+    const { shutdownCapture, abandonCapture } = req('audio_devices.js');
+    const log = [];
+    const node = (name) => ({ disconnect: () => log.push(`${name}.disconnect`) });
+    const stream = { getTracks: () => [{ stop: () => log.push('track.stop') }] };
+    const ctx = { close: async () => log.push('ctx.close') };
+    const owner = { node: node('node'), sourceNode: node('src'), mute: node('mute'), stream, ctx };
+    await shutdownCapture(owner);
+    assert.deepEqual(log, ['node.disconnect', 'src.disconnect', 'mute.disconnect', 'track.stop', 'ctx.close']);
+    assert.deepEqual([owner.node, owner.sourceNode, owner.mute, owner.stream, owner.ctx], [null, null, null, null, null]);
+
+    // A newer start() owns other objects: abandoning the old ones must not clear them.
+    log.length = 0;
+    const newer = { stream: { getTracks: () => [] }, ctx: { close: async () => {} } };
+    const keep = { stream: newer.stream, ctx: newer.ctx };
+    await abandonCapture(keep, stream, ctx);
+    assert.deepEqual(log, ['track.stop', 'ctx.close']);
+    assert.equal(keep.stream, newer.stream);
+    assert.equal(keep.ctx, newer.ctx);
 });

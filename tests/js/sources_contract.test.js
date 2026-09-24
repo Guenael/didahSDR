@@ -60,3 +60,12 @@ test('every source keeps the callbacks it is given (a dropped one fails silently
         for (const n of names) assert.equal(src[n], cb, `${Ctor.name}.${n}`);
     }
 });
+
+test('source policy: only Kiwi and RTL-SDR follow the dial; every catalog source has a label', () => {
+    const { sourcePolicy } = req('sources_controller.js');
+    const { SOURCES } = req('sources.js');
+    for (const src of SOURCES) assert.ok(sourcePolicy(src.protocol).label, src.id);
+    const following = SOURCES.filter((s) => sourcePolicy(s.protocol).followsDial).map((s) => s.protocol).sort();
+    assert.deepEqual(following, ['kiwi', 'rtlsdr']);
+    assert.equal(sourcePolicy('nope').label, sourcePolicy('didah').label);
+});

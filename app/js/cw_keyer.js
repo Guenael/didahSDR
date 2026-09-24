@@ -2,9 +2,8 @@
  * didahSDR - Local CW keyer (iambic A/B, straight key, Morse typeahead)
  *
  * Sample-accurate at the audio rate. Sidetone is generated inside the AudioWorklet so
- * paddle keys are not delayed by the RX jitter buffer. render() can also fill a matching
- * IQ oscillator (used by tests; the live UI freezes the waterfall during TX).
- * No allocations once the output buffers have sized themselves to the packet.
+ * paddle keys are not delayed by the RX jitter buffer. tick() is the keying envelope;
+ * render() turns it into sidetone. No allocations once audioOut has sized itself to the quantum.
  */
 
 const MORSE_TABLE = {
@@ -69,12 +68,8 @@ class CwKeyer {
         this.pullChar = null;
 
         this.audioRate = 48000;
-        this.iqRate = 96000;
         this.audioOut = new Float32Array(0);
-        this.iqI = new Float32Array(0);
-        this.iqQ = new Float32Array(0);
         this.audioPhase = 0.0;
-        this.iqPhase = 0.0;
 
         this.abort();
     }
@@ -354,53 +349,25 @@ class CwKeyer {
     }
 
     /**
-     * Advance `nAudio` samples into `audioOut` (and `nIq` IQ samples at `iqRate` into `iqI`/`iqQ`).
-     * Returns nothing: this runs every AudioWorklet quantum, so it must not allocate.
+     * Advance `nAudio` samples of sidetone at `bfoHz` into `audioOut`. The keying envelope itself
+     * is tick(). Returns nothing: this runs every AudioWorklet quantum, so it must not allocate.
      */
-    render(nAudio, audioRate, nIq, iqRate, bfoHz, iqOffsetHz) {
+    render(nAudio, audioRate, bfoHz) {
         this.audioRate = audioRate;
-        this.iqRate = iqRate;
         if (this.audioOut.length !== nAudio) this.audioOut = new Float32Array(nAudio);
-        if (this.iqI.length !== nIq) {
-            this.iqI = new Float32Array(nIq);
-            this.iqQ = new Float32Array(nIq);
-        }
         const audio = this.audioOut;
-        const outI = this.iqI, outQ = this.iqQ;
         const TWO_PI = 2.0 * Math.PI;
-        const aStep = (TWO_PI * bfoHz) / audioRate;
-        const qStep = (TWO_PI * iqOffsetHz) / iqRate;
-        const ratio = nAudio > 0 ? nIq / nAudio : 1;
-        let iqPos = 0;
+        const step = (TWO_PI * bfoHz) / audioRate;
+        let phase = this.audioPhase;
         let keyed = false;
-        let aPhase = this.audioPhase;
-        let qPhase = this.iqPhase;
-
         for (let n = 0; n < nAudio; n++) {
-            const env = this.tick();
-            const a = env * this.amp;
+            const a = this.tick() * this.amp;
             if (a > 1e-6) keyed = true;
-            audio[n] = a * Math.sin(aPhase);
-            aPhase += aStep;
-            if (aPhase > TWO_PI) aPhase -= TWO_PI;
-            else if (aPhase < -TWO_PI) aPhase += TWO_PI;
-
-            const nHere = Math.round((n + 1) * ratio) - iqPos;
-            for (let k = 0; k < nHere && iqPos < nIq; k++, iqPos++) {
-                outI[iqPos] = a * Math.cos(qPhase);
-                outQ[iqPos] = a * Math.sin(qPhase);
-                qPhase += qStep;
-                if (qPhase > TWO_PI) qPhase -= TWO_PI;
-                else if (qPhase < -TWO_PI) qPhase += TWO_PI;
-            }
+            audio[n] = a * Math.sin(phase);
+            phase += step;
+            if (phase > TWO_PI) phase -= TWO_PI;
         }
-        while (iqPos < nIq) {
-            outI[iqPos] = 0;
-            outQ[iqPos] = 0;
-            iqPos++;
-        }
-        this.audioPhase = aPhase;
-        this.iqPhase = qPhase;
+        this.audioPhase = phase;
         this.keyed = keyed;
     }
 }

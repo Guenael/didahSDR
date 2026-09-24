@@ -91,7 +91,6 @@ class HorizontalWaterfall {
         this.onTuneCallback = null;
         this.onPanCallback = null;
         this.onBandwidthCallback = null;
-        this.showPassband = true;
 
         this.initDOM();
         this.initRenderer();
@@ -416,14 +415,9 @@ class HorizontalWaterfall {
         gl.uniform1f(this.uniforms.u_freqBottom, freqBottom);
         gl.uniform1f(this.uniforms.u_freqTop, freqTop);
 
-        let pbMin = 2.0, pbMax = 2.0;
-        if (this.showPassband) {
-            const { lo, hi } = this.getPassbandEdges();
-            pbMin = (lo - fullMinFreq) / this.sampleRate;
-            pbMax = (hi - fullMinFreq) / this.sampleRate;
-        }
-        gl.uniform1f(this.uniforms.u_pbMin, pbMin);
-        gl.uniform1f(this.uniforms.u_pbMax, pbMax);
+        const { lo, hi } = this.getPassbandEdges();
+        gl.uniform1f(this.uniforms.u_pbMin, (lo - fullMinFreq) / this.sampleRate);
+        gl.uniform1f(this.uniforms.u_pbMax, (hi - fullMinFreq) / this.sampleRate);
 
         const edgeX = (freqTop - freqBottom) / Math.max(1.0, this.wfHeight) * 1.5;
         gl.uniform1f(this.uniforms.u_edgeX, edgeX);
@@ -538,13 +532,6 @@ class HorizontalWaterfall {
             lo: this.tunedFreq + this.lowCut,
             hi: this.tunedFreq + this.highCut
         };
-    }
-
-    setShowPassband(on) {
-        const next = !!on;
-        if (next === this.showPassband) return;
-        this.showPassband = next;
-        this.refreshChrome();
     }
 
     /**
@@ -662,19 +649,17 @@ class HorizontalWaterfall {
             ctx.closePath();
             ctx.fill();
 
-            if (this.showPassband) {
-                const { lo, hi } = this.getPassbandEdges();
-                const yTop = this.freqToY(hi);
-                const yBottom = this.freqToY(lo);
-                ctx.strokeStyle = '#e5c07b';
-                ctx.lineWidth = 2.5;
-                ctx.beginPath();
-                ctx.moveTo(4, yTop);
-                ctx.lineTo(0, yTop);
-                ctx.lineTo(0, yBottom);
-                ctx.lineTo(4, yBottom);
-                ctx.stroke();
-            }
+            const { lo, hi } = this.getPassbandEdges();
+            const yTop = this.freqToY(hi);
+            const yBottom = this.freqToY(lo);
+            ctx.strokeStyle = '#e5c07b';
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.moveTo(4, yTop);
+            ctx.lineTo(0, yTop);
+            ctx.lineTo(0, yBottom);
+            ctx.lineTo(4, yBottom);
+            ctx.stroke();
         }
     }
 

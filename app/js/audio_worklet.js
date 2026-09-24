@@ -11,7 +11,8 @@
  * Port protocol (main thread -> worklet):
  *   Float32Array            : mono audio at `inputRate` to enqueue (transferred, not copied)
  *   { type: 'reset' }       : drop buffered audio (power off / stop)
- *   { type: 'inputRate', rate } : demodulator output rate (48000 replay, ~12000 Kiwi)
+ *   { type: 'inputRate', rate } : demodulator output rate (channel rate, ~12 kHz)
+ *   { type: 'sab', sab }    : SharedArrayBuffer ring (audio_ring.js) that replaces the Float32Array messages
  *   { type: 'debug', on }   : enable once-per-second stats messages
  *   { type: 'paddle', which, down } / { type: 'straight', down }
  *   { type: 'wpm'|'iambic'|'sidetone'|'arm'|'hasText'|'setText'|'char'|'abort', ... }
@@ -34,7 +35,7 @@ function renderSidetoneOrRx(txState, engine, keyer, out, sampleRate, sidetoneHz,
             engine.reset();
             txState.wasTx = true;
         }
-        keyer.render(out.length, sampleRate, 0, sampleRate, sidetoneHz, 0);
+        keyer.render(out.length, sampleRate, sidetoneHz);
         const audio = keyer.audioOut;
         let peak = 0;
         for (let i = 0; i < out.length; i++) {
@@ -63,7 +64,7 @@ class DidahAudioEngine {
         this.inputRate = inputRate;
         this.outputRate = outputRate;
 
-        // Circular ring buffer (32768 samples = ~682 ms at 48 kHz)
+        // Circular ring buffer at the input rate (32768 samples = ~2.7 s at 12 kHz)
         this.RING_SIZE = 32768;
         this.ring = new Float32Array(this.RING_SIZE);
         this.writePos = 0;
@@ -80,7 +81,7 @@ class DidahAudioEngine {
 
         // Click-free underrun handling: exponential fade-out of the last sample when the buffer runs
         // dry, linear fade-in over FADE_IN samples when playback resumes.
-        this.FADE_IN = 480;   // 10 ms at 48 kHz
+        this.FADE_IN = 480;   // output samples: 10 ms at 48 kHz
         this.fadeInPos = this.FADE_IN;
         this.lastSample = 0.0;
 

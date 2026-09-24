@@ -1,6 +1,5 @@
 /**
  * didahSDR - CW Adaptive IIR Filter & Spatial Sharpening
- * Port of my_adaptive_iir_filter.py
  *
  * Algorithm highlights:
  * 1. Automatic noise-floor estimation (mean of the lowest 12.5% bins, via a 256-bin dB histogram
@@ -13,7 +12,6 @@ class CWAdaptiveFilter {
     constructor(nfft = 2048) {
         this.nfft = nfft;
         this.enabled = true;
-        this.useCurveCompression = false;
 
         this.prevAvgNf = 0.0;
         this.prevPower = new Float32Array(nfft);
@@ -36,7 +34,6 @@ class CWAdaptiveFilter {
         // Adjustable filter constants
         this.alphaNf = 0.5;      // Noise floor smoothing factor
         this.iirFactor = 0.04;   // Non-linear gain rate
-        this.gainScaling = 1.0;  // Convolution scale
     }
 
     setKernel(name) {
@@ -115,12 +112,6 @@ class CWAdaptiveFilter {
             let p = inputPower[j] - this.prevAvgNf;
             if (p < 1e-12) p = 1e-12;
 
-            if (this.useCurveCompression) {
-                // Logarithmic compression curve
-                const k = 10.0;
-                p = (Math.log1p(k * (p / 40.0)) / Math.log1p(k)) * 40.0;
-            }
-
             // Non-linear IIR smoothing
             // gain = 1.0 - exp(-0.04 * power)
             const g = 1.0 - Math.exp(-this.iirFactor * p);
@@ -139,8 +130,7 @@ class CWAdaptiveFilter {
             return this.outputBuffer;
         }
 
-        const baseScale = this.kernelScales[this.currentKernelName] || (2.5 / (kernel[kHalf] || 5.0));
-        const scale = baseScale * this.gainScaling;
+        const scale = this.kernelScales[this.currentKernelName] || (2.5 / (kernel[kHalf] || 5.0));
 
         for (let j = 0; j < N; j++) {
             let convSum = 0.0;

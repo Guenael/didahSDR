@@ -1,7 +1,7 @@
 /**
  * didahSDR - REC for the CW decoder: captures a labelled-dataset clip at the decoder tap.
  *
- * One clip writes three files for the same instant (see REC-BUTTON.md):
+ * One clip writes three files for the same instant (format: docs/recording.md):
  *   <name>.wav        stereo int16 I/Q at the decoder rate: exactly what the model reads
  *                     (channel filtered, pre-BFO / AGC / NR, carrier at DC, after CwTapResampler).
  *   <name>.audio.wav  mono int16 demodulated audio at the channel rate: what the operator heard.
