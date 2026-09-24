@@ -8,6 +8,9 @@
  * `createSettingsStore` is the DOM-free core: a list of fields { name, save() -> value|undefined,
  * load(value) }, restored in list order. `appSettingsFields(ctx)` is the page's field table; the
  * names are the stored JSON keys, so renaming one drops that setting for existing users.
+ *
+ * Not named settings*.js: common reverse-proxy hardening rules drop requests for /settings and
+ * settings.js (exploit probes) without a response, which broke a deployment behind nginx.
  */
 
 const SETTINGS_KEY = 'didah_settings';

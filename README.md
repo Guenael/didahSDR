@@ -142,7 +142,7 @@ Python server (aiohttp, standard library only otherwise)
   depend on the source rate. USB/LSB passbands are in `modes.js`.
 - The client scripts are plain `<script>` globals; load order is in `app/index.html`. `app.js` only
   wires the controllers (`spectrum_pipeline.js`, `tuning.js`, `source_manager.js`, `tx_controller.js`,
-  `ic7300_controller.js`, `ui_bindings.js`, `settings_store.js`). Hot paths (`processRawIQ`, FFT, audio
+  `ic7300_controller.js`, `ui_bindings.js`, `prefs_store.js`). Hot paths (`processRawIQ`, FFT, audio
   callback, render loop) do not allocate.
 - The CW decoder front end (`cw_frontend.js`) must stay numerically identical to the training repo's
   `didahcw/frontend.py`; `tests/js/cw_frontend.test.js` checks it against a fixture generated there.

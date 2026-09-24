@@ -1,4 +1,4 @@
-# --- STAGE 1: Build (pure-Python wheels only, no compiler needed) ---
+# --- STAGE 1: Build ---
 FROM python:3.12-slim AS builder
 
 RUN useradd -g users -m build
@@ -11,7 +11,7 @@ USER build
 RUN pip install --no-cache-dir --user .
 
 
-# --- STAGE 2: CW decoder runtime (onnxruntime-web, checksum-verified) ---
+# --- STAGE 2: CW decoder runtime (onnxruntime-web) ---
 FROM python:3.12-slim AS ort
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -50,7 +50,8 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE 9000
 
-# No recording is shipped. Mount one and pass it after the image name, e.g.
-#   podman run -p 9000:9000 -v ./samples:/home/app/samples:ro,Z localhost/didahsdr \
-#       --wav /home/app/samples/my_iq.wav --center-freq 14048000
 ENTRYPOINT ["python3", "server/replay_server.py", "--host", "0.0.0.0", "--port", "9000"]
+
+# Mount your samples directory in your docker run command, e.g.:
+# `docker run --rm --mount type=bind,src=/samples,dst=/home/app/samples,readonly -p 172.17.0.1:9000:9000 didahsdr:latest &`
+# `podman ... --wav /home/app/samples/my_iq.wav --center-freq 14048000 -p 9000:9000
