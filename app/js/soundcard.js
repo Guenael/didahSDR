@@ -141,7 +141,7 @@ class SoundcardSource {
         stream.getTracks().forEach((t) => t.stop());
         this._status('Listing sound-card inputs…', false);
         await this.refreshDevices();
-        onAudioDevicesChanged(() => { this.refreshDevices(); });
+        onAudioDevicesChanged(() => { this.refreshDevices(); }, this);
         return true;
     }
 

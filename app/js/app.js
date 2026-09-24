@@ -11,7 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
         sampleRate: 96000,
         tunedFreq: 14050800,
         modulation: 'cw',
-        cwBandwidth: 150,     // 50 to 500 Hz
+        cwBandwidth: 150,     // CW_BW_MIN..CW_BW_MAX (modes.js)
         cwOffset: 700,        // 400 to 1000 Hz dedicated tone offset (default 700 Hz)
         lowCut: -75,          // Symmetrical around carrier for CW
         highCut: 75,
@@ -63,7 +63,7 @@ document.addEventListener('DOMContentLoaded', () => {
     clientFft.initWindow(state.filterEnabled ? 'flattop' : 'bh4');
 
     // 3. Initialize Client-Side Demodulator with AGC
-    const demodulator = new DidahDemodulator(state.sampleRate, 48000);
+    const demodulator = new DidahDemodulator(state.sampleRate);
     const qrss = new QrssSpectrum();
     qrss.setInputRate(demodulator.audioRate);
 
@@ -87,9 +87,16 @@ document.addEventListener('DOMContentLoaded', () => {
     let recNoise = false;
     let recTimer = null;
     let modelStamp = null;
-    fetch('models/didahcw.onnx', { method: 'HEAD' })
-        .then((r) => { modelStamp = r.headers.get('last-modified'); })
-        .catch(() => {});
+    // The model and onnxruntime-web are not in git (README, "CW decoder assets").
+    Promise.all([
+        fetch('models/didahcw.onnx', { method: 'HEAD' }),
+        fetch('lib/ort.wasm.min.js', { method: 'HEAD' })
+    ]).then(([model, ort]) => {
+        if (model.ok) modelStamp = model.headers.get('last-modified');
+        if (!model.ok) cwDecoder.setMissing('models/didahcw.onnx not installed (see README)');
+        else if (!ort.ok) cwDecoder.setMissing('onnxruntime-web missing: run scripts/fetch_ort.sh');
+        updateRecUi();
+    }).catch(() => {});
     function updateRecUi() {
         if (!recBtn) return;
         const on = cwRecorder.recording;
@@ -868,7 +875,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (state.modulation === 'cw') {
             const el = document.getElementById('cw-bw-slider');
             if (!el) return;
-            const next = Math.max(50, Math.min(500, state.cwBandwidth + direction * 10));
+            const next = Math.max(CW_BW_MIN, Math.min(CW_BW_MAX, state.cwBandwidth + direction * 10));
             if (next === state.cwBandwidth) return;
             el.value = String(next);
             el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1451,6 +1458,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const cwBwSlider = document.getElementById('cw-bw-slider');
     const cwBwVal = document.getElementById('cw-bw-val');
     if (cwBwSlider) {
+        cwBwSlider.min = String(CW_BW_MIN);
+        cwBwSlider.max = String(CW_BW_MAX);
         cwBwSlider.addEventListener('input', (e) => {
             state.cwBandwidth = parseInt(e.target.value, 10);
             if (cwBwVal) cwBwVal.textContent = `${state.cwBandwidth} Hz`;
@@ -1816,6 +1825,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         updateTrxLeds();
     });
+
+    // Losing focus (alt-tab, a dialog, another window) means the paddle keyup never arrives.
+    // Drop the paddles and disarm, so a real radio is never left keyed.
+    function releaseTxOnFocusLoss() {
+        if (!paddleDown() && !txPaddle.armed) return;
+        releasePaddles();
+        if (txPaddle.armed) setTxArmed(false);
+        if (ic7300) ic7300.releaseKey();
+    }
+    window.addEventListener('blur', releaseTxOnFocusLoss);
 
     // Unlock Web Audio on any initial interaction
     const unlockAudio = () => {
@@ -2189,7 +2208,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (rtlBiasInput) rtlBiasInput.addEventListener('change', pushRtlControls);
 
     document.addEventListener('visibilitychange', () => syncIc7300Key());
-    window.addEventListener('pagehide', () => { if (ic7300) ic7300.releaseKey(); });
+    window.addEventListener('pagehide', () => {
+        releaseTxOnFocusLoss();
+        if (ic7300) ic7300.releaseKey();
+    });
 
     const checked = document.querySelector('input[name="iq-source"]:checked');
     const startId = (checked && checked.value) || 'va2gka';

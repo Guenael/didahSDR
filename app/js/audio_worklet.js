@@ -374,11 +374,13 @@ if (typeof registerProcessor !== 'undefined') {
         }
 
         process(inputs, outputs) {
-            if (this.sab && !this.txState.wasTx) {
+            if (this.sab) {
+                // Drain even during TX (and discard), or the ring holds ~1 s of stale RX for after TX.
                 const scratch = this.sabScratch;
+                const tx = this.txState.wasTx;
                 let n = sabRead(this.sab, scratch);
                 while (n > 0) {
-                    this.engine.push(scratch, n);
+                    if (!tx) this.engine.push(scratch, n);
                     if (n < scratch.length) break;
                     n = sabRead(this.sab, scratch);
                 }

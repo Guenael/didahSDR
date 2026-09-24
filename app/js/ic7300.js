@@ -112,7 +112,7 @@ class Ic7300Source {
         stream.getTracks().forEach((t) => t.stop());
         this._status('Listing audio inputs (48 kHz)…', false);
         await this.refreshDevices();
-        onAudioDevicesChanged(() => { this.refreshDevices(); });
+        onAudioDevicesChanged(() => { this.refreshDevices(); }, this);
         return true;
     }
 

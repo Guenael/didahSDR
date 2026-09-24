@@ -19,7 +19,7 @@ function keyedTone(offset, amp, onMs, offMs, seconds, noiseAmp) {
 
 function runCollect(iq, chunk = 4800, everyChunk) {
     const f = floatIq(iq);
-    const d = new DidahDemodulator(RATE, 48000);
+    const d = new DidahDemodulator(RATE);
     d.setModulation('cw'); d.setOffsetFrequency(3000);
     const blocks = [];
     for (let p = 0; p + chunk <= f.length; p += chunk) {
@@ -68,7 +68,7 @@ test('sample WAV: the strongest CW signal is levelled near the AGC target', { sk
     let pi = 0; for (let i = 1; i < N; i++) if (acc[i] > acc[pi]) pi = i;
     const offset = ((pi - N / 2) * wav.rate) / N;
 
-    const d = new DidahDemodulator(wav.rate, 48000);
+    const d = new DidahDemodulator(wav.rate);
     d.setModulation('cw'); d.setOffsetFrequency(offset);
     let pk = 0;
     const chunk = 4800;

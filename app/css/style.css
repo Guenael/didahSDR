@@ -1425,6 +1425,7 @@ kbd {
 .cwd-status-ready { color: #00e676; border-color: #1f5232; }
 .cwd-status-loading { color: var(--accent-gold); }
 .cwd-status-error { color: var(--accent-red); border-color: #5a1f1f; }
+.cwd-status-missing { color: var(--accent-gold); border-color: #5a4a1f; }
 
 .cwd-output {
     font-family: var(--font-mono);

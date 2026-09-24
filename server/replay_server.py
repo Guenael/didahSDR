@@ -28,6 +28,8 @@ from aiohttp import web
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("didahSDR-Server")
 
+SERVER_VERSION = "0.1.0"  # keep in step with pyproject.toml
+
 
 class WavIQLooper:
     """
@@ -66,8 +68,12 @@ class WavIQLooper:
         self.total_samples = self.data_bytes // self.frame_bytes
 
         self._fd = os.open(wav_path, os.O_RDONLY)
-        self._read_pos = 0  # next block start, bytes into the data chunk (producer side)
-        self._blocks: collections.deque[bytes] = collections.deque()
+        # Blocks are numbered; block k starts at (k * step) % data_bytes. The consumer plays block
+        # `_consume_seq` next; the producer reserves `_next_seq` before its (threaded) read.
+        self._step = min(self.block_bytes, self.data_bytes)
+        self._next_seq = 0
+        self._consume_seq = 0
+        self._blocks: collections.deque[tuple[int, bytes]] = collections.deque()
         self._cur = memoryview(b"")
         self._cur_off = 0
         self._sync_reads = 0
@@ -101,34 +107,41 @@ class WavIQLooper:
                 pos += 8 + size + (size & 1)  # chunks are word-aligned
         raise ValueError(f"No 'data' chunk found in {wav_path}")
 
+    def _seq_pos(self, seq: int) -> int:
+        return (seq * self._step) % self.data_bytes
+
     def _read_block(self, pos: int) -> bytes:
-        """Reads `block_bytes` starting at data offset `pos`, wrapping around the end of the data."""
-        n = min(self.block_bytes, self.data_bytes)
+        """Reads one block starting at data offset `pos`, wrapping around the end of the data."""
+        n = self._step
         first = min(n, self.data_bytes - pos)
         out = os.pread(self._fd, first, self.data_offset + pos)
         if first < n:
             out += os.pread(self._fd, n - first, self.data_offset)
         return out
 
-    def _advance_read_pos(self):
-        self._read_pos = (self._read_pos + min(self.block_bytes, self.data_bytes)) % self.data_bytes
-
-    def _reserve_block_pos(self) -> int:
-        """Claim the next block offset before the read, so a sync fallback cannot repeat it."""
-        pos = self._read_pos
-        self._advance_read_pos()
-        return pos
+    def _reserve_seq(self) -> int:
+        """Claim the next block for the prefetch task. Never a block the consumer has already played."""
+        seq = max(self._next_seq, self._consume_seq)
+        self._next_seq = seq + 1
+        return seq
 
     def _take_next_block(self):
-        """Moves the next prefetched block into `_cur`; reads synchronously if the queue is empty."""
-        if self._blocks:
-            block = self._blocks.popleft()
+        """Moves block `_consume_seq` into `_cur`, reading it synchronously if it is not queued yet.
+
+        A prefetch read can still be in flight when the queue runs dry. The synchronous read then takes
+        that block's place, and the late copy is dropped here instead of being played out of order.
+        """
+        seq = self._consume_seq
+        while self._blocks and self._blocks[0][0] < seq:
+            self._blocks.popleft()
+        if self._blocks and self._blocks[0][0] == seq:
+            block = self._blocks.popleft()[1]
         else:
-            block = self._read_block(self._read_pos)
-            self._advance_read_pos()
+            block = self._read_block(self._seq_pos(seq))
             self._sync_reads += 1
             if self._sync_reads in (1, 10, 100) or self._sync_reads % 1000 == 0:
                 logger.warning(f"IQ prefetch queue empty, read synchronously ({self._sync_reads} times)")
+        self._consume_seq = seq + 1
         self._cur = memoryview(block)
         self._cur_off = 0
 
@@ -152,9 +165,10 @@ class WavIQLooper:
         loop = asyncio.get_running_loop()
         while True:
             if len(self._blocks) < self.prefetch_blocks:
-                pos = self._reserve_block_pos()
-                block = await loop.run_in_executor(None, self._read_block, pos)
-                self._blocks.append(block)
+                seq = self._reserve_seq()
+                block = await loop.run_in_executor(None, self._read_block, self._seq_pos(seq))
+                if seq >= self._consume_seq:
+                    self._blocks.append((seq, block))
             else:
                 await asyncio.sleep(0.1)
 
@@ -225,7 +239,7 @@ class DidahServer:
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     text = msg.data.strip()
                     if text.startswith("SERVER DE CLIENT"):
-                        await ws.send_str("CLIENT DE SERVER server=didahsdr version=1.0.0-cw")
+                        await ws.send_str(f"CLIENT DE SERVER server=didahsdr version={SERVER_VERSION}")
 
                         # Send config JSON
                         config_msg = {
@@ -311,13 +325,16 @@ def find_wav_file(specified: str | None = None) -> str:
 
 async def start_background_tasks(app):
     logger.info("Initializing IQ prefetch and raw IQ broadcast tasks...")
-    server = app["server"]
+    server = app[SERVER_KEY]
     tasks = [asyncio.create_task(server.looper.prefetch_loop()), asyncio.create_task(server.raw_iq_broadcast_loop())]
     yield
     for t in tasks:
         t.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
     server.looper.close()
+
+
+SERVER_KEY: web.AppKey["DidahServer"] = web.AppKey("server", DidahServer)
 
 
 def create_app(wav_path: str, static_dir: Path, center_freq: int):
@@ -338,7 +355,7 @@ def create_app(wav_path: str, static_dir: Path, center_freq: int):
         return response
 
     app = web.Application(middlewares=[isolation_headers])
-    app["server"] = server
+    app[SERVER_KEY] = server
     app.cleanup_ctx.append(start_background_tasks)
 
     app.router.add_get("/ws", server.handle_websocket)

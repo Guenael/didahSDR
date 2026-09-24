@@ -2,7 +2,7 @@ from pathlib import Path
 
 import asyncio
 
-from server.replay_server import WavIQLooper, chunk_sample_count, create_app, enqueue_packet, find_wav_file
+from server.replay_server import SERVER_KEY, WavIQLooper, chunk_sample_count, create_app, enqueue_packet, find_wav_file
 
 
 def test_wav_iq_looper():
@@ -64,7 +64,7 @@ def test_create_app():
     static_dir = Path(__file__).resolve().parent.parent / "app"
     app = create_app(wav_path, static_dir, center_freq=14048000)
     assert app is not None
-    assert "server" in app
+    assert SERVER_KEY in app
 
 
 def test_chunk_samples_96000_is_exact():
@@ -85,8 +85,8 @@ def test_chunk_samples_44100_sums_to_one_second():
     assert abs(acc) < 1e-6
 
 
-def test_prefetch_reserves_the_block_before_reading(tmp_path):
-    """The sync fallback must not re-read a block the prefetch task has already claimed."""
+def test_late_prefetch_block_is_not_played_out_of_order(tmp_path):
+    """Queue runs dry while a prefetch read is in flight: the stream must still be the file, in order."""
     import wave
 
     frames = 96000
@@ -99,13 +99,49 @@ def test_prefetch_reserves_the_block_before_reading(tmp_path):
         w.writeframes(pcm)
 
     looper = WavIQLooper(str(wav_path), block_bytes=4096, prefetch_blocks=2)
-    pos = looper._reserve_block_pos()
-    assert pos == 0
-    assert looper._read_pos == 4096
-    reserved = looper._read_block(pos)
-    fallback = looper._read_block(looper._read_pos)
-    assert reserved != fallback
+    got = bytearray()
+    got += looper.next_raw_iq_bytes(1024)  # block 0, read synchronously (nothing prefetched yet)
+    in_flight = looper._reserve_seq()  # the prefetch task claims block 1 and starts reading...
+    assert in_flight == 1
+    got += looper.next_raw_iq_bytes(1024)  # ...but the consumer needs block 1 now: sync read
+    late = looper._read_block(looper._seq_pos(in_flight))
+    looper._blocks.append((in_flight, late))  # the late copy lands after the sync read
+    assert looper._reserve_seq() == 2  # the producer never reclaims a played block
+    while len(got) < len(pcm) * 2:
+        got += looper.next_raw_iq_bytes(2400)
+    assert bytes(got) == (pcm * 3)[: len(got)]
     looper.close()
+
+
+def test_prefetch_loop_keeps_the_stream_in_order(tmp_path):
+    """Real prefetch task running concurrently with the consumer."""
+    import wave
+
+    frames = 20000
+    pcm = bytes((i * 13) & 0xFF for i in range(frames * 4))
+    wav_path = tmp_path / "loop.wav"
+    with wave.open(str(wav_path), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(96000)
+        w.writeframes(pcm)
+
+    async def run():
+        looper = WavIQLooper(str(wav_path), block_bytes=6000, prefetch_blocks=3)
+        task = asyncio.create_task(looper.prefetch_loop())
+        got = bytearray()
+        try:
+            while len(got) < len(pcm) * 3:
+                got += looper.next_raw_iq_bytes(2400)
+                await asyncio.sleep(0)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            looper.close()
+        return bytes(got)
+
+    got = asyncio.run(run())
+    assert got == (pcm * 4)[: len(got)]
 
 
 def test_enqueue_drops_oldest_when_full():

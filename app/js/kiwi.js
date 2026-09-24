@@ -162,6 +162,7 @@ class KiwiConnection {
         this.onRawIQ = options.onRawIQ || null;
         this.onReady = options.onReady || null;             // ({ sampleRate, centerFreq }) => void
         this.onStatusChange = options.onStatusChange || null;
+        this.onCenterApplied = options.onCenterApplied || null;   // (hz) => void, once the radio has moved
     }
 
     connect() {

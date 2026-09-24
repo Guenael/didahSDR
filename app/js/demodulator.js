@@ -274,7 +274,7 @@ class DidahDemodulator {
         const prevMod = this.modulation;
         if (p.offsetFreq !== undefined) this.offsetFreq = p.offsetFreq;
         if (p.modulation !== undefined) this.modulation = p.modulation.toLowerCase();
-        if (p.cwBandwidth !== undefined) this.cwBandwidth = Math.max(30, Math.min(500, p.cwBandwidth));
+        if (p.cwBandwidth !== undefined) this.cwBandwidth = Math.max(CW_BW_MIN, Math.min(CW_BW_MAX, p.cwBandwidth));
         if (p.bfoPitch !== undefined) this.bfoPitch = Math.max(300, Math.min(1200, p.bfoPitch));
         this.updateFilters();
         this.squelch.setHangForMode(this.modulation);
@@ -304,7 +304,7 @@ class DidahDemodulator {
     }
 
     setCwBandwidth(bw) {
-        this.cwBandwidth = Math.max(30, Math.min(500, bw));
+        this.cwBandwidth = Math.max(CW_BW_MIN, Math.min(CW_BW_MAX, bw));
         this.updateFilters();
         this._resetAudioFx();
     }

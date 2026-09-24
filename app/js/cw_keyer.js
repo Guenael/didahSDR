@@ -354,8 +354,8 @@ class CwKeyer {
     }
 
     /**
-     * Advance `nAudio` samples. IQ length is `nIq` at `iqRate` (typically 2× audio).
-     * @returns {{ audio: Float32Array, i: Float32Array, q: Float32Array }}
+     * Advance `nAudio` samples into `audioOut` (and `nIq` IQ samples at `iqRate` into `iqI`/`iqQ`).
+     * Returns nothing: this runs every AudioWorklet quantum, so it must not allocate.
      */
     render(nAudio, audioRate, nIq, iqRate, bfoHz, iqOffsetHz) {
         this.audioRate = audioRate;
@@ -402,7 +402,6 @@ class CwKeyer {
         this.audioPhase = aPhase;
         this.iqPhase = qPhase;
         this.keyed = keyed;
-        return { audio, i: outI, q: outQ };
     }
 }
 

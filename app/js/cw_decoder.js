@@ -76,6 +76,17 @@ class CWDecoder {
         this.onTap = (i, q, n) => this._tap(i, q, n);
         /** CWRecorder fed with the tap at the decoder rate; any reset ends its clip. */
         this.recorder = null;
+        /** Set when the model or onnxruntime files are not served (they are not in git). */
+        this.missing = '';
+    }
+
+    /** The decoder cannot run: say why instead of starting a worker that will fail. */
+    setMissing(detail) {
+        this.missing = detail || '';
+        if (this.missing) {
+            this.stop();
+            this._status('missing', this.missing);
+        }
     }
 
     /** Nearest multiple of 800 (Kiwi reports e.g. 12001.2 Hz; the 0.01 % error is irrelevant). */
@@ -96,6 +107,7 @@ class CWDecoder {
     }
 
     start(audioRate) {
+        if (this.missing) { this._status('missing', this.missing); return; }
         const plan = CWDecoder.ratePlan(audioRate);
         if (!plan.rate) { this._status('error', `unsupported rate ${audioRate}`); return; }
         this._bindResampler(audioRate, plan);
@@ -131,7 +143,8 @@ class CWDecoder {
         if (this.recorder) this.recorder.stop('decoder off');
         if (this.demod.tapCallback === this.onTap) this.demod.tapCallback = null;
         if (this.worker) this.worker.postMessage({ type: 'run', on: false });
-        this._status(this.worker ? 'standby' : 'off');
+        if (this.missing) this._status('missing', this.missing);
+        else this._status(this.worker ? 'standby' : 'off');
     }
 
     setRate(audioRate) {
@@ -330,7 +343,7 @@ class CWDecoder {
     _status(state, detail) {
         const el = this.els.status;
         if (!el) return;
-        const label = { loading: 'LOADING', ready: 'DECODING', standby: 'STANDBY', off: 'OFF', error: 'ERROR' }[state] || state.toUpperCase();
+        const label = { loading: 'LOADING', ready: 'DECODING', standby: 'STANDBY', off: 'OFF', error: 'ERROR', missing: 'NO MODEL' }[state] || state.toUpperCase();
         el.textContent = label;
         el.className = `cwd-status cwd-status-${state}`;
         el.title = detail || '';

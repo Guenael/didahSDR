@@ -96,7 +96,10 @@ function setupVfoMemories({
     const dialEl = document.getElementById(dialId);
     if (!listEl || !addBtn) return null;
 
-    const storage = window.localStorage;
+    // Reading window.localStorage itself throws when site data is blocked; fall back to memory only.
+    let storage;
+    try { storage = window.localStorage; } catch (e) { storage = null; }
+    if (!storage) storage = { getItem: () => null, setItem: () => {} };
     let memories = loadVfoMemories(storage, storageKey);
     let dialHz = 0;
 

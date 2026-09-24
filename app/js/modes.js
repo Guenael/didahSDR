@@ -12,6 +12,10 @@ const MODES = {
     lsb: { label: 'LSB', low: -2700, high: -200 },
 };
 
+/** CW channel filter width, Hz (slider, wheel and demodulator share it). */
+const CW_BW_MIN = 50;
+const CW_BW_MAX = 500;
+
 const SSB_LOW_MIN = 50;
 const SSB_LOW_MAX = 1000;
 const SSB_HIGH_MIN = 800;
@@ -42,7 +46,7 @@ function setSsbPassband(lowHz, highHz) {
 
 if (typeof module !== 'undefined') {
     module.exports = {
-        MODES, WATERFALL_DB_FLOOR, setSsbPassband,
+        MODES, WATERFALL_DB_FLOOR, setSsbPassband, CW_BW_MIN, CW_BW_MAX,
         SSB_LOW_MIN, SSB_LOW_MAX, SSB_HIGH_MIN, SSB_HIGH_MAX
     };
 }

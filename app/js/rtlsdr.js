@@ -702,6 +702,7 @@ class RtlSdrSource {
         this.onRawIQ = options.onRawIQ || null;
         this.onReady = options.onReady || null;
         this.onStatusChange = options.onStatusChange || null;
+        this.onCenterApplied = options.onCenterApplied || null;   // (hz) => void, once the radio has moved
 
         this.mode = 'direct-q';
         this.ppm = 0;

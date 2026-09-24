@@ -27,12 +27,13 @@ function listAudioInputs() {
     });
 }
 
-const audioDeviceWatchers = [];
+/** owner -> callback. One entry per source, so pressing Enable again does not stack refreshes. */
+const audioDeviceWatchers = new Map();
 let audioDeviceTimer = null;
 let audioDeviceListening = false;
 
-function onAudioDevicesChanged(fn) {
-    audioDeviceWatchers.push(fn);
+function onAudioDevicesChanged(fn, owner) {
+    audioDeviceWatchers.set(owner || fn, fn);
     if (audioDeviceListening) return;
     if (typeof navigator === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.addEventListener) return;
     audioDeviceListening = true;
@@ -40,7 +41,7 @@ function onAudioDevicesChanged(fn) {
         if (audioDeviceTimer) clearTimeout(audioDeviceTimer);
         audioDeviceTimer = setTimeout(() => {
             audioDeviceTimer = null;
-            for (let i = 0; i < audioDeviceWatchers.length; i++) audioDeviceWatchers[i]();
+            for (const fn of audioDeviceWatchers.values()) fn();
         }, 400);
     });
 }

@@ -146,7 +146,7 @@ test('through the demodulator, squelch stays shut on band noise and opens on CW'
         for (let p = 0; p + chunk <= f.length; p += chunk) d.process(f.subarray(p, p + chunk));
     };
 
-    const quiet = new DidahDemodulator(IQ, 48000);
+    const quiet = new DidahDemodulator(IQ);
     quiet.setModulation('cw');
     quiet.setOffsetFrequency(3000);
     quiet.setSquelchEnabled(true);
@@ -154,7 +154,7 @@ test('through the demodulator, squelch stays shut on band noise and opens on CW'
     run(quiet, keyed(0, 3e-4, 2.5));
     assert.equal(quiet.squelch.open, false, 'band noise should stay closed at 10 dB margin');
 
-    const sig = new DidahDemodulator(IQ, 48000);
+    const sig = new DidahDemodulator(IQ);
     sig.setModulation('cw');
     sig.setOffsetFrequency(3000);
     sig.setSquelchEnabled(true);

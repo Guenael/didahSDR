@@ -92,3 +92,16 @@ test('greedy CTC collapses repeats, drops blanks, carries prev across chunks', (
     const r2 = ctcGreedy(lp.subarray(4 * C), 2, C, chars, blank, r.prev);
     assert.equal(r2.text, '');
 });
+
+test('a missing model keeps the decoder off and says why', () => {
+    const status = { textContent: '', className: '', title: '' };
+    const demod = { tapCallback: null };
+    const dec = new CWDecoder(demod, { output: null, status });
+    dec.setMissing('models/didahcw.onnx not installed (see README)');
+    dec.start(12000);
+    assert.equal(dec.active, false);
+    assert.equal(dec.worker, null);
+    assert.equal(demod.tapCallback, null);
+    assert.equal(status.textContent, 'NO MODEL');
+    assert.match(status.title, /README/);
+});

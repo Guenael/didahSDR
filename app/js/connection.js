@@ -52,7 +52,7 @@ class DidahConnection {
                 this.connected = true;
                 this.notifyStatus('Handshaking...', false);
                 // Send handshake
-                this.ws.send('SERVER DE CLIENT client=didahsdr version=1.0.0-cw type=receiver');
+                this.ws.send('SERVER DE CLIENT client=didahsdr version=0.1.0 type=receiver');
             };
 
             this.ws.onmessage = (event) => {
@@ -129,7 +129,7 @@ class DidahConnection {
             // payload, so it is copied into a reused, aligned Int16Array. The array handed to
             // onRawIQ is valid until the next packet (same contract as the demodulator output).
             const payloadBytes = buffer.byteLength - 1;
-            if (this.iqBuf.byteLength !== payloadBytes) this.iqBuf = new Int16Array(payloadBytes >> 1);
+            if (this.iqBuf.length !== payloadBytes >> 1) this.iqBuf = new Int16Array(payloadBytes >> 1);
             new Uint8Array(this.iqBuf.buffer).set(new Uint8Array(buffer, 1, payloadBytes & ~1));
             const n = this.iqBuf.length;
             if (!this.f32 || this.f32.length !== n) this.f32 = new Float32Array(n);
