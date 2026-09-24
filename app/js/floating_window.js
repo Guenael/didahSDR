@@ -1,5 +1,5 @@
 /**
- * didahSDR - Draggable floating window (SNR-Meter, W-Config)
+ * didahSDR - Draggable floating window (SNR-Meter, W-Config, VFO memories)
  *
  * Toggle button in the top bar, close button, header drag with viewport clamping; position and
  * visibility persisted in localStorage under `${storageKey}_visible|_top|_left`.
@@ -29,6 +29,7 @@ function setupFloatingWindow({ windowId, headerId, closeBtnId, toggleBtnId, stor
         el.style.left = `${left}px`;
         el.style.top = `${top}px`;
         el.style.right = 'auto';
+        el.style.bottom = 'auto';
     };
 
     const storedTop = localStorage.getItem(`${storageKey}_top`);
@@ -37,6 +38,7 @@ function setupFloatingWindow({ windowId, headerId, closeBtnId, toggleBtnId, stor
         el.style.top = storedTop;
         el.style.left = storedLeft;
         el.style.right = 'auto';
+        el.style.bottom = 'auto';
     } else {
         Object.assign(el.style, defaultPos || {});
     }
@@ -56,6 +58,7 @@ function setupFloatingWindow({ windowId, headerId, closeBtnId, toggleBtnId, stor
         el.style.left = `${left}px`;
         el.style.top = `${top}px`;
         el.style.right = 'auto';
+        el.style.bottom = 'auto';
     };
     const onUp = () => {
         if (!dragging) return;

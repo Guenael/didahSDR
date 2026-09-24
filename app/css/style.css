@@ -512,6 +512,24 @@ html, body {
     color: var(--text-muted);
 }
 
+.vfo-mem-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    padding: 2px 5px;
+    margin: 0;
+    cursor: pointer;
+    font-family: inherit;
+    line-height: inherit;
+}
+
+.vfo-mem-btn:hover,
+.vfo-mem-btn.active {
+    color: var(--accent-gold);
+    border-color: var(--border-highlight);
+    background: var(--bg-subpanel);
+}
+
 /* Button groups */
 .btn-group {
     display: inline-flex;
@@ -1435,4 +1453,136 @@ kbd {
     font-size: 9px;
     color: var(--text-muted);
     text-align: right;
+}
+
+/* ---------- VFO memories ---------- */
+.vfo-mem-window {
+    width: 268px;
+    top: auto;
+    bottom: 118px;
+    left: 16px;
+}
+
+.vfo-mem-body {
+    gap: 8px;
+}
+
+.vfo-mem-dial {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent-cyan);
+    letter-spacing: 0.3px;
+}
+
+.vfo-mem-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 280px;
+    overflow-y: auto;
+}
+
+.vfo-mem-empty {
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 6px 2px;
+}
+
+.vfo-mem-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.vfo-mem-recall {
+    flex: 1;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    color: var(--text-main);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 3px 6px;
+    cursor: pointer;
+    text-align: left;
+}
+
+.vfo-mem-recall:hover {
+    background: #282e3d;
+}
+
+.vfo-mem-row.is-current .vfo-mem-recall {
+    color: var(--accent-blue);
+    background: #2a3d5a;
+    box-shadow: inset 0 0 0 1px var(--accent-blue);
+}
+
+.vfo-mem-band {
+    flex: 0 0 36px;
+    font-size: 10px;
+    color: var(--accent-gold);
+}
+
+.vfo-mem-hz {
+    font-weight: 600;
+}
+
+.vfo-mem-store,
+.vfo-mem-del,
+.vfo-mem-add {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.vfo-mem-store:hover,
+.vfo-mem-add:hover {
+    color: var(--accent-gold);
+    border-color: var(--accent-gold);
+}
+
+.vfo-mem-del {
+    padding: 2px 5px;
+    font-size: 12px;
+    line-height: 1;
+}
+
+.vfo-mem-del:hover {
+    color: var(--accent-red);
+    border-color: var(--accent-red);
+}
+
+.vfo-mem-add:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.vfo-mem-add:disabled:hover {
+    color: var(--text-muted);
+    border-color: var(--border-color);
+}
+
+.vfo-mem-footer {
+    display: flex;
+    gap: 6px;
+}
+
+.vfo-mem-footer .vfo-mem-add {
+    flex: 1;
+    padding: 4px 8px;
+}
+
+.vfo-mem-hint {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text-muted);
 }
