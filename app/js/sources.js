@@ -23,8 +23,8 @@ function kiwiEntryFrequency(prev) {
 
 const SOURCES = [
     {
-        id: 'va2gka',
-        label: 'VA2GKA Replay',
+        id: 'replay_server',
+        label: 'Replay Server',
         protocol: 'didah',
         minLevel: -130,
         dynamicRange: 60,

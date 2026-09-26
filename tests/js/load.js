@@ -41,7 +41,7 @@ global.MORSE_TABLE = cwKeyer.MORSE_TABLE;
 global.morseOf = cwKeyer.morseOf;
 global.sanitizeTxText = cwKeyer.sanitizeTxText;
 
-const SAMPLE_WAV = path.resolve(__dirname, '../../samples/SAMPLE_20120219_174346Z_14048kHz_RF.wav');
+const SAMPLE_WAV = path.resolve(__dirname, '../../samples/REPLAY_SAMPLE.wav');
 
 /** Reads a 16-bit stereo IQ WAV: returns { rate, data: Int16Array interleaved I/Q } or null if absent. */
 function loadSampleWav(maxSeconds = 12) {

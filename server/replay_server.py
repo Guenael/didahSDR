@@ -340,7 +340,7 @@ class DidahServer:
 def find_wav_file(specified: str | None = None) -> str:
     candidates = [
         specified,
-        "./samples/SAMPLE_20120219_174346Z_14048kHz_RF.wav",
+        "./samples/REPLAY_SAMPLE.wav",
     ]
     for c in candidates:
         if c and os.path.isfile(c):

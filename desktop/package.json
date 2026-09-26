@@ -1,6 +1,6 @@
 {
   "name": "didahsdr",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "description": "didahSDR desktop shell. Live IQ sources in a self-contained window. The Python replay server is not included.",
   "author": "Guenael",
   "license": "AGPL-3.0-or-later",

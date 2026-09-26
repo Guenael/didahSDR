@@ -6,7 +6,6 @@ const {
     VFO_MEMORY_MAX,
     VFO_MEMORY_DEFAULTS,
     formatVfoHz,
-    bandOfHz,
     sanitizeVfoMemories,
     loadVfoMemories,
 } = req('vfo_memories.js');
@@ -18,14 +17,7 @@ test('format groups Hz the same way as the drum dial', () => {
     assert.equal(formatVfoHz(700), '700');
 });
 
-test('band label follows the amateur segment', () => {
-    assert.equal(bandOfHz(1802500), '160m');
-    assert.equal(bandOfHz(14047500), '20m');
-    assert.equal(bandOfHz(18097500), '17m');
-    assert.equal(bandOfHz(500000), '');
-});
-
-test('a missing store restores the ARRL Morse frequencies', () => {
+test('a missing store restores the ARRL W1AW Morse frequencies', () => {
     assert.deepEqual(sanitizeVfoMemories(null), [...VFO_MEMORY_DEFAULTS]);
     assert.deepEqual(sanitizeVfoMemories('nope'), [...VFO_MEMORY_DEFAULTS]);
     assert.equal(VFO_MEMORY_DEFAULTS[4], 18097500);

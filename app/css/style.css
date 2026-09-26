@@ -1527,12 +1527,6 @@ kbd {
     box-shadow: inset 0 0 0 1px var(--accent-blue);
 }
 
-.vfo-mem-band {
-    flex: 0 0 36px;
-    font-size: 10px;
-    color: var(--accent-gold);
-}
-
 .vfo-mem-hz {
     font-weight: 600;
 }
