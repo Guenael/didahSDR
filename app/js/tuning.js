@@ -18,8 +18,6 @@ function createTuning(ctx) {
     const { state, demodulator, waterfall, valueDial, smeter, qrss, audioPlayer, cwDecoder } = ctx;
     let tuneResetTimer = null;
     let pendingTuneHz = 0;      // net retune since the last decoder / NLMS reset
-    let dspControlPending = false;
-    let lastDspControl = '';
 
     const src = () => ctx.source;
     const isIc7300 = () => src().protocol === 'ic7300';
@@ -71,7 +69,7 @@ function createTuning(ctx) {
         waterfall.panOffset = 0;
         if (state.qrssEnabled) {
             waterfall.zoom = qrss.viewZoom();
-            waterfall.setCenterFreq(state.tunedFreq, qrss.outRate || 375);
+            waterfall.setCenterFreq(ctx.pipeline.qrssCenter(), qrss.outRate || 375);
         } else {
             waterfall.setCenterFreq(state.centerFreq, state.sampleRate);
         }
@@ -167,37 +165,12 @@ function createTuning(ctx) {
             qrss.reset();
             waterfall.zoom = qrss.viewZoom();
             waterfall.panOffset = 0;
-            waterfall.setCenterFreq(state.tunedFreq, qrss.outRate || 375);
+            waterfall.setCenterFreq(ctx.pipeline.qrssCenter(), qrss.outRate || 375);
             waterfall.clear();
         }
-        sendDspControl();
         if (ctx.vfoMemories) ctx.vfoMemories.syncDial(currentDialHz());
     }
 
-    // dspcontrol is informational for the replay server; coalesce mouse-rate tuning into one send per
-    // animation frame and skip it entirely when nothing changed.
-    function sendDspControl() {
-        if (dspControlPending) return;
-        dspControlPending = true;
-        requestAnimationFrame(() => {
-            dspControlPending = false;
-            const params = {
-                mod: state.modulation,
-                offset_freq: state.tunedFreq - state.centerFreq,
-                low_cut: state.lowCut,
-                high_cut: state.highCut
-            };
-            const key = `${params.mod}|${params.offset_freq}|${params.low_cut}|${params.high_cut}`;
-            if (key === lastDspControl) return;
-            lastDspControl = key;
-            if (src().protocol === 'didah') ctx.transports.conn.setDemodParams(params);
-        });
-    }
-
-    /** A new source must receive the next dspcontrol even if the parameters did not change. */
-    function resetDspControl() {
-        lastDspControl = '';
-    }
 
     function setModulation(mod) {
         state.modulation = mod.toLowerCase();
@@ -300,7 +273,7 @@ function createTuning(ctx) {
 
     Object.assign(ctx, {
         currentDialHz, applyDialRange, applyIqRate, shiftCenter, applyCenter, setTunedFrequency,
-        resetDspControl, setModulation, updateTopBarInfo, updateSourceStatus
+        setModulation, updateTopBarInfo, updateSourceStatus
     });
 }
 

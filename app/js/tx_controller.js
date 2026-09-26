@@ -1,13 +1,13 @@
 /**
- * didahSDR - local CW transmit: paddles (F8/F9/F4), PTT arm, typeahead text, WPM / iambic mode,
- * the RX/TX LEDs, and the IC-7300 key lines (DTR/RTS via CI-V).
+ * didahSDR - local CW transmit: paddles (F8/F9/F7), macro keys (F1-F4, macros.js), PTT arm, typeahead text, WPM / iambic mode,
+ * the RX/TX LEDs, the IC-7300 key lines (DTR/RTS via CI-V), and TX_IQ to a v1 device (tx_iq.js).
  *
  * The keyer itself runs in the AudioWorklet (cw_keyer.js); this side forwards paddle edges and text,
  * and mirrors the worklet's { tx, keyed } state. Losing window focus releases everything: the
  * paddle keyup never arrives after an alt-tab, and a real radio must never stay keyed.
  */
 
-const PADDLE_KEYS = Object.freeze({ F8: 'dit', F9: 'dah', F4: 'straight' });
+const PADDLE_KEYS = Object.freeze({ F8: 'dit', F9: 'dah', F7: 'straight' });
 
 function createTxController(ctx) {
     const { state, audioPlayer } = ctx;
@@ -19,6 +19,14 @@ function createTxController(ctx) {
     let trxLedKey = '';
 
     const ic7300 = () => ctx.transports.ic7300;
+    const link = () => ctx.transports && ctx.transports.conn;
+
+    // The v1 link (replay server / didah transceiver): the keyer's edges become a 96 kHz CW carrier.
+    const txPump = ctx.txPump = new TxIqPump({
+        setPtt: (on) => { if (link()) link().setPtt(on); },
+        buffer: (n) => link().txFrame(n),
+        send: (buf, n, index) => link().sendTxIq(index, txPump.sampleRate)
+    });
 
     function paddleDown() {
         return txPaddle.dit || txPaddle.dah || txPaddle.straight;
@@ -54,7 +62,24 @@ function createTxController(ctx) {
         if (txBtn) txBtn.classList.toggle('active', workletKeyed || paddleDown());
     }
 
-    function syncIc7300Key() {
+    function syncKeyLines() {
+        syncIc7300Lines();
+        syncDidahTx();
+    }
+
+    function syncDidahTx() {
+        const conn = link();
+        if (!conn) return;
+        const live = ctx.source.protocol === 'didah'
+            && state.modulation === 'cw'
+            && txPaddle.armed
+            && conn.ready
+            && document.visibilityState !== 'hidden';
+        txPump.setOffset(state.tunedFreq - state.centerFreq);
+        txPump.update(live && workletTx, live && workletKeyed, conn.rxIndex);
+    }
+
+    function syncIc7300Lines() {
         const rig = ic7300();
         if (!rig) return;
         const live = ctx.source.protocol === 'ic7300'
@@ -131,7 +156,7 @@ function createTxController(ctx) {
                 audioPlayer.setKeyerHasText(!!(el && el.value.length));
             }
         }
-        syncIc7300Key();
+        syncKeyLines();
         updateTrxLeds();
     };
 
@@ -150,6 +175,7 @@ function createTxController(ctx) {
         if (txText) txText.disabled = !cw;
         if (wpmSlider) wpmSlider.disabled = !cw;
         if (txRow) txRow.classList.toggle('is-dimmed', !cw);
+        if (ctx.updateMacroUi) ctx.updateMacroUi();
     }
 
     function setTxArmed(on) {
@@ -161,7 +187,7 @@ function createTxController(ctx) {
             audioPlayer.setKeyerHasText(false);
             releasePaddles();
         }
-        syncIc7300Key();
+        syncKeyLines();
         updateTxUi();
     }
 
@@ -176,12 +202,13 @@ function createTxController(ctx) {
             ctx.pipeline.forgetTx();
         }
         updateTxUi();
-        syncIc7300Key();
+        syncKeyLines();
         updateTrxLeds();
     }
 
     function onPowerOff() {
         txPaddle.armed = false;
+        txPump.abort();
         audioPlayer.abortKeyer();
         workletTx = false;
         workletKeyed = false;
@@ -273,6 +300,16 @@ function createTxController(ctx) {
                 setTxArmed(!txPaddle.armed);
                 return;
             }
+            // F1-F4 fire the macros (macros.js), even from a text field. Always swallowed so the
+            // browser's help / find do not open.
+            const macro = MACRO_KEYS[e.key];
+            if (macro !== undefined) {
+                e.preventDefault();
+                if (e.repeat || state.modulation !== 'cw' || !ctx.fireMacro) return;
+                audioPlayer.resume();
+                ctx.fireMacro(macro);
+                return;
+            }
             const paddle = PADDLE_KEYS[e.key];
             if (!paddle) return;
             e.preventDefault();
@@ -290,7 +327,7 @@ function createTxController(ctx) {
         });
 
         window.addEventListener('blur', releaseTxOnFocusLoss);
-        document.addEventListener('visibilitychange', () => syncIc7300Key());
+        document.addEventListener('visibilitychange', () => syncKeyLines());
         window.addEventListener('pagehide', () => {
             releaseTxOnFocusLoss();
             const rig = ic7300();
@@ -299,7 +336,7 @@ function createTxController(ctx) {
     }
 
     Object.assign(ctx, {
-        isLocalTx, updateTrxLeds, syncIc7300Key, setTxArmed, updateTxUi,
+        isLocalTx, updateTrxLeds, syncKeyLines, setTxArmed, updateTxUi,
         onTxModulationChanged: onModulationChanged, onTxPowerOff: onPowerOff
     });
     return { bind, isArmed: () => txPaddle.armed };

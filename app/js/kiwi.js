@@ -9,7 +9,7 @@
 const KIWI_GPS_BYTES = 10;
 const KIWI_SND_HEADER = 7; // flags u8 + seq u32le + smeter u16be
 const KIWI_DEFAULT_PORT = 8073;
-const KIWI_EXAMPLE_URL = 'http://oh5ae.dyndns.org:8073';
+const KIWI_PLACEHOLDER_URL = 'http://server:port';
 
 function kiwiHostForUrl(host) {
     return host.indexOf(':') >= 0 ? `[${host}]` : host;
@@ -347,6 +347,6 @@ class KiwiConnection {
 if (typeof module !== 'undefined') {
     module.exports = {
         KiwiConnection, unpackKiwiSndIq, parseKiwiMsg, kiwiSndUrl, normalizeKiwiUrl, kiwiTerminal,
-        kiwiHostForUrl, KIWI_DEFAULT_PORT, KIWI_EXAMPLE_URL
+        kiwiHostForUrl, KIWI_DEFAULT_PORT, KIWI_PLACEHOLDER_URL
     };
 }

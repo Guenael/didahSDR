@@ -9,6 +9,7 @@
  *   source_manager.js     the five IQ sources, switching, Source-window controls
  *   ic7300_controller.js  following / writing the IC-7300 VFO over CI-V
  *   tx_controller.js      paddles, PTT, typeahead, IC-7300 key lines
+ *   macros.js / logbook.js  F1-F4 macro bar, QSO logbook + ADIF export
  *   ui_bindings.js        panels, decoder window, REC, help, keyboard
  *   prefs_store.js     localStorage persistence of the operator settings
  */
@@ -32,6 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
         speedMultiplier: 3,
         fftSize: 2048,
         filterEnabled: true,
+        fftWindow: 'bh4',
         filterKernel: 'medium',
         agcSpeed: 'medium',
         userHasTuned: false,  // once true, the server's start_freq is no longer applied
@@ -51,7 +53,11 @@ document.addEventListener('DOMContentLoaded', () => {
         squelchEnabled: false,
         squelchMargin: 10,
         wpm: 20,
-        iambicMode: 'B'
+        iambicMode: 'B',
+        myCall: 'MY/CALL',    // OPERATOR section; macros.js
+        myExtra: '',
+        macroMode: 'qso',     // qso | ans | test (MACRO_SETS)
+        contestNr: 1
     };
     setSsbPassband(state.ssbLow, state.ssbHigh);
 
@@ -60,7 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
     cwFilter.enabled = state.filterEnabled;
     cwFilter.setKernel(state.filterKernel);
     const clientFft = new DidahFFT(state.fftSize);
-    clientFft.initWindow(state.filterEnabled ? 'flattop' : 'bh4');
+    clientFft.initWindow(state.filterEnabled ? 'flattop' : state.fftWindow);
 
     // Audio chain: demodulator (with AGC and audio FX), QRSS decimator, CW decoder, REC
     const demodulator = new DidahDemodulator(state.sampleRate);
@@ -72,6 +78,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     const cwRecorder = new CWRecorder();   // onStop is set by ui_bindings.js
     cwDecoder.recorder = cwRecorder;
+    const audioRecorder = new AudioRecorder();   // bottom-bar REC; onStop is set by ui_bindings.js
     demodulator.setAgcSpeed(state.agcSpeed);
     demodulator.setCwBandwidth(state.cwBandwidth);
     demodulator.setBfoPitch(state.cwOffset);
@@ -105,7 +112,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     const ctx = {
-        state, cwFilter, clientFft, demodulator, qrss, cwDecoder, cwRecorder, audioPlayer, waterfall,
+        state, cwFilter, clientFft, demodulator, qrss, cwDecoder, cwRecorder, audioRecorder, audioPlayer, waterfall,
         source: findSource(state.selectedSourceId),
         transports: {},
         vfoMemories: null
@@ -135,6 +142,8 @@ document.addEventListener('DOMContentLoaded', () => {
     createIc7300Controller(ctx);
     ctx.sources = createSourceManager(ctx);
     createTuning(ctx);
+    createLogbook(ctx);
+    createMacroBar(ctx);
 
     bindUi(ctx);
     tx.bind();

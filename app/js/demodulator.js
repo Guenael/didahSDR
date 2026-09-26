@@ -15,6 +15,8 @@
  *   6. AGC (in place). Reset when the tune jumps by more than LARGE_RETUNE_HZ.
  *   7. Squelch gate (optional; power is measured on the pre-AGC buffer).
  *   A tap on the stage-3 output (complex, pre-BFO, pre-AGC) feeds the CW decoder.
+ *   The stage-2 output (pre-channel) feeds ChannelNoiseEstimator (agc.js): median of the spectrum
+ *   outside the passband, converted to the audio noise power that the AGC knee and the squelch use.
  *
  * Image rejection is set by the channel filter stopband (~60 dB).
  * No allocations per packet.
@@ -211,12 +213,15 @@ class DidahDemodulator {
         this.autoNotch = new DidahAutoNotch(this.audioRate);
         this.nr = new DidahNoiseReduction(this.audioRate);
         this.squelch = new DidahSquelch(this.audioRate);
+        this.noiseEst = new ChannelNoiseEstimator(this.audioRate);
 
         this.audioOut = new Float32Array(0);
         this.tapCallback = null;
         this.qrssPush = null;
         this.tapI = new Float32Array(0);
         this.tapQ = new Float32Array(0);
+        this.preI = new Float32Array(0);
+        this.preQ = new Float32Array(0);
 
         this.updateFilters();
     }
@@ -251,6 +256,7 @@ class DidahDemodulator {
             this.agc = new AGC(this.audioRate);
             this.agc.setSpeed(this.agcSpeed);
             this.squelch.setSampleRate(this.audioRate);
+            this.noiseEst.setSampleRate(this.audioRate);
             this.autoNotch.setSampleRate(this.audioRate);
             this.nr.setSampleRate(this.audioRate);
             this.channelCutoff = -1;
@@ -283,7 +289,7 @@ class DidahDemodulator {
         const jump = p.offsetFreq !== undefined && Math.abs(this.offsetFreq - prevOffset) > LARGE_RETUNE_HZ;
         // A wheel tick must not wipe the NLMS weights. Mode changes and large retunes do.
         if (modeChanged || jump) this._resetAudioFx();
-        if (jump) this.agc.reset();
+        if (jump) this._resetLevels();
     }
 
     /** @param {number} freq - tuned frequency relative to the IQ centre, Hz */
@@ -293,7 +299,7 @@ class DidahDemodulator {
         this.updateFilters();
         if (Math.abs(freq - prev) > LARGE_RETUNE_HZ) {
             this._resetAudioFx();
-            this.agc.reset();
+            this._resetLevels();
         }
     }
 
@@ -322,6 +328,12 @@ class DidahDemodulator {
     setNrStrength(pct) { this.nr.setStrength(pct); }
     setSquelchEnabled(on) { this.squelch.setEnabled(on); }
     setSquelchMarginDb(db) { this.squelch.setMarginDb(db); }
+
+    /** New station: drop the AGC memory; the next noise frame is taken as is. */
+    _resetLevels() {
+        this.agc.reset();
+        this.noiseEst.reset();
+    }
 
     _resetAudioFx() {
         this.autoNotch.reset();
@@ -354,6 +366,8 @@ class DidahDemodulator {
             this.channelCutoff = cutoff;
             const n = kaiserNumTaps(CH_ATTEN_DB, CH_TRANSITION_HZ, this.audioRate);
             this.channel.setTaps(designLowpass(n, cutoff, this.audioRate, CH_ATTEN_DB), false);
+            this.noiseEst.setChannel(cutoff, CH_TRANSITION_HZ, this.channel.h);
+            this.squelch.setNoiseBandwidth(this.noiseEst.sumH2 * this.audioRate);
         }
     }
 
@@ -371,10 +385,14 @@ class DidahDemodulator {
             this.audioOut = new Float32Array(maxOut);
             this.tapI = new Float32Array(maxOut);
             this.tapQ = new Float32Array(maxOut);
+            this.preI = new Float32Array(maxOut);
+            this.preQ = new Float32Array(maxOut);
         }
         const out = this.audioOut;
         const tapI = this.tapI;
         const tapQ = this.tapQ;
+        const preI = this.preI;
+        const preQ = this.preQ;
         const hbs = this.hbs;
         const fills = this.hbFill;
         const stages = this.stages;
@@ -417,6 +435,8 @@ class DidahDemodulator {
             if (!alive) continue;
 
             if (this.qrssPush) this.qrssPush(si, sq);
+            preI[o] = si;
+            preQ[o] = sq;
             channel.push(si, sq);
             channel.compute();
             const ci = channel.outI;
@@ -447,7 +467,10 @@ class DidahDemodulator {
             if (this.autoNotch.enabled) this.autoNotch.process(out, o);
             if (this.nr.enabled) this.nr.process(out, o);
         }
-        this.squelch.observe(out, o, this.agc.noiseFloor);
+        const est = this.noiseEst;
+        est.process(preI, preQ, o);
+        if (est.valid) this.agc.setNoiseRms(est.noiseRms);
+        this.squelch.observe(out, o, est.noisePower);
         this.agc.process(out.subarray(0, o));
         this.squelch.gate(out, o);
         return out.subarray(0, o);

@@ -1,17 +1,39 @@
 import asyncio
-import json
+import logging
+import struct
 from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from server.replay_server import (
+    ACK_S,
+    COMMAND_S,
+    DEVICE_INFO_S,
+    ERROR_S,
+    EVENT_S,
+    FLAG_ACK_REQ,
+    HEADER,
+    HELLO_S,
+    MAX_TX_MW,
     SERVER_KEY,
+    STATUS_S,
+    STREAM_HEADER,
+    Cap,
+    Cmd,
+    Err,
+    Event,
+    MsgType,
+    StatusFlag,
     WavIQLooper,
     chunk_sample_count,
     create_app,
     enqueue_packet,
     find_wav_file,
+    iq_energy,
+    iq_peak,
+    pack_message,
+    parse_header,
 )
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "app"
@@ -143,8 +165,44 @@ def test_create_app(iq_wav):
     assert app[SERVER_KEY].center_freq == 7048000
 
 
+GOLDEN_SET_FREQUENCY = "6469646168534452" "01001001" "07000000" "0c000000" "00000000" "01000000" "005bd60000000000"
+
+
+def cmd(seq, code, value, flags=FLAG_ACK_REQ):
+    return pack_message(MsgType.COMMAND, seq, COMMAND_S.pack(code, 0, value), flags)
+
+
+def hello(seq=0):
+    return pack_message(MsgType.HELLO, seq, HELLO_S.pack(b"pytest".ljust(16, b"\0"), int(Cap.RX_IQ | Cap.TX_IQ)))
+
+
+async def recv_until(ws, msg_type, timeout=5.0):
+    """Next binary frame of `msg_type` as (header, payload); other frames are skipped."""
+    while True:
+        msg = await asyncio.wait_for(ws.receive(), timeout=timeout)
+        assert msg.type.name == "BINARY", msg
+        hdr = parse_header(msg.data)
+        assert hdr is not None
+        if hdr[2] == msg_type:
+            return hdr, msg.data[HEADER.size : HEADER.size + hdr[5]]
+
+
+def test_golden_command_matches_the_js_codec():
+    """Same hex as tests/js/didah_proto.test.js: both codecs must frame a COMMAND byte for byte alike."""
+    assert cmd(7, Cmd.SET_FREQUENCY, 14048000).hex() == GOLDEN_SET_FREQUENCY
+    assert parse_header(bytes.fromhex(GOLDEN_SET_FREQUENCY)) == (1, 0, MsgType.COMMAND, FLAG_ACK_REQ, 7, 12)
+    assert parse_header(b"notdidah" + bytes(16)) is None
+    assert parse_header(b"didahSDR") is None
+
+
+def test_iq_energy_full_scale_is_one():
+    raw = struct.pack("<4h", 32767, 0, 0, -32768)
+    assert iq_energy(raw) == pytest.approx(2.0, rel=1e-4)
+    assert iq_peak(raw) == 32768
+
+
 def test_http_and_websocket_end_to_end(iq_wav):
-    """Index and isolation headers over HTTP, then handshake -> config -> 0x03 IQ packets."""
+    """Index and isolation headers over HTTP, then HELLO -> DEVICE_INFO + STATUS -> SET_RX_STREAM -> RX_IQ."""
     path, pcm = iq_wav()
 
     async def run():
@@ -155,25 +213,128 @@ def test_http_and_websocket_end_to_end(iq_wav):
             assert resp.headers["Cross-Origin-Embedder-Policy"] == "require-corp"
             assert "didahSDR" in await resp.text()
             assert (await client.get("/js/app.js")).status == 200
+            assert (await client.get("/js/didah_proto.js")).status == 200
 
             ws = await client.ws_connect("/ws")
-            await ws.send_str("SERVER DE CLIENT client=test version=0 type=receiver")
-            config = None
-            packets = []
-            while config is None or len(packets) < 3:
-                msg = await asyncio.wait_for(ws.receive(), timeout=5)
-                if msg.type.name == "TEXT" and msg.data.startswith("{"):
-                    config = json.loads(msg.data)
-                elif msg.type.name == "BINARY":
-                    packets.append(msg.data)
+            await ws.send_bytes(hello())
+            _, info = await recv_until(ws, MsgType.DEVICE_INFO)
+            _, status = await recv_until(ws, MsgType.STATUS)
+            await ws.send_bytes(cmd(1, Cmd.SET_RX_STREAM, 1))
+            _, ack = await recv_until(ws, MsgType.ACK)
+            packets = [(await recv_until(ws, MsgType.RX_IQ))[1] for _ in range(3)]
+            await ws.send_bytes(cmd(2, Cmd.SET_FREQUENCY, 14000000))
+            _, freq_ack = await recv_until(ws, MsgType.ACK)
+            await ws.send_bytes(cmd(3, Cmd.SET_RF_GAIN, 100))
+            _, err = await recv_until(ws, MsgType.ERROR)
             await ws.close()
-            return config, packets
+            return info, status, ack, packets, freq_ack, err
 
-    config, packets = asyncio.run(run())
-    assert config["type"] == "config"
-    assert config["value"]["samp_rate"] == 96000
-    assert config["value"]["center_freq"] == 7048000
-    for p in packets:
-        assert p[0] == 0x03
-        assert len(p) == 1 + 2400 * 4  # 25 ms at 96 kHz
-    assert b"".join(p[1:] for p in packets) == pcm[: 3 * 9600]
+    info, status, ack, packets, freq_ack, err = asyncio.run(run())
+    name, _fw, _serial, caps, fmin, fmax, rate, formats, max_tx, _, _ = DEVICE_INFO_S.unpack(info)
+    assert name.rstrip(b"\0") == b"didahSDR replay"
+    assert (fmin, fmax, rate, formats, max_tx) == (7048000, 7048000, 96000, 1, MAX_TX_MW)
+    assert caps & Cap.RX_IQ and caps & Cap.TX_IQ and not caps & Cap.TX_KEY
+    assert STATUS_S.unpack(status)[7] == 7048000
+    assert STATUS_S.unpack(status)[6] & StatusFlag.PLL_LOCK
+    assert ACK_S.unpack(ack) == (1, Cmd.SET_RX_STREAM, 0, 1)
+    assert ACK_S.unpack(freq_ack)[3] == 7048000  # fixed LO: the ACK reports where it stays
+    assert ERROR_S.unpack(err) == (3, Err.UNSUPPORTED)
+
+    first = STREAM_HEADER.unpack_from(packets[0])[0]
+    raw = b""
+    for k, p in enumerate(packets):
+        index, rate, fmt, channels, _ = STREAM_HEADER.unpack_from(p)
+        assert (index, rate, fmt, channels) == (first + 2400 * k, 96000, 0, 2)  # contiguous, 25 ms each
+        assert len(p) == STREAM_HEADER.size + 2400 * 4
+        raw += p[STREAM_HEADER.size :]
+    start = (first * 4) % len(pcm)  # the stream ran before RX was enabled: index = samples since start
+    assert raw == (pcm + pcm)[start : start + 3 * 9600]
+
+
+def test_tx_iq_is_measured_and_logged(iq_wav, caplog):
+    """PTT on, full-scale TX_IQ -> STATUS shows the set power and SWR 1.2; PTT off logs the over."""
+    path, _ = iq_wav()
+    tone = struct.pack("<2h", 32767, 0) * 2400
+
+    async def run():
+        app = create_app(str(path), STATIC_DIR, center_freq=7048000)
+        async with TestClient(TestServer(app)) as client:
+            ws = await client.ws_connect("/ws")
+            await ws.send_bytes(hello())
+            await recv_until(ws, MsgType.STATUS)
+            await ws.send_bytes(cmd(1, Cmd.SET_TX_POWER, 50000))
+            _, power_ack = await recv_until(ws, MsgType.ACK)
+            await ws.send_bytes(cmd(2, Cmd.SET_PTT, 1))
+            await recv_until(ws, MsgType.ACK)
+            for k in range(4):
+                stream = STREAM_HEADER.pack(1000 + 2400 * k, 96000, 0, 2, 0)
+                await ws.send_bytes(pack_message(MsgType.TX_IQ, 3 + k, stream + tone))
+            while True:
+                _, st = await recv_until(ws, MsgType.STATUS)
+                if STATUS_S.unpack(st)[0] > 0:
+                    break
+            await ws.send_bytes(cmd(9, Cmd.SET_PTT, 0))
+            await recv_until(ws, MsgType.ACK)
+            await ws.close()
+            return power_ack, st
+
+    with caplog.at_level(logging.INFO, logger="didahSDR-Server"):
+        power_ack, st = asyncio.run(run())
+    assert ACK_S.unpack(power_ack)[3] == MAX_TX_MW  # clamped
+    fwd, refl, swr_x100, _, _, _, flags, _ = STATUS_S.unpack(st)
+    assert fwd == pytest.approx(MAX_TX_MW, rel=1e-3)
+    assert refl == pytest.approx(fwd * (0.2 / 2.2) ** 2, abs=1)
+    assert swr_x100 == 120
+    assert flags & StatusFlag.TX and flags & StatusFlag.PTT
+    assert "TX enabled" in caplog.text
+    assert "TX released" in caplog.text and "9600 IQ samples" in caplog.text and "0 gaps" in caplog.text
+
+
+def test_tx_watchdog_drops_ptt(iq_wav, caplog):
+    path, _ = iq_wav()
+
+    async def run():
+        app = create_app(str(path), STATIC_DIR, center_freq=7048000)
+        async with TestClient(TestServer(app)) as client:
+            ws = await client.ws_connect("/ws")
+            await ws.send_bytes(hello())
+            await recv_until(ws, MsgType.STATUS)
+            await ws.send_bytes(cmd(1, Cmd.SET_TX_WATCHDOG, 150))
+            _, wd_ack = await recv_until(ws, MsgType.ACK)
+            await ws.send_bytes(cmd(2, Cmd.SET_PTT, 1))
+            _, event = await recv_until(ws, MsgType.EVENT)
+            _, st = await recv_until(ws, MsgType.STATUS)
+            await ws.close()
+            return wd_ack, event, st
+
+    with caplog.at_level(logging.INFO, logger="didahSDR-Server"):
+        wd_ack, event, st = asyncio.run(run())
+    assert ACK_S.unpack(wd_ack)[3] == 150
+    assert EVENT_S.unpack(event) == (Event.WATCHDOG, 150)
+    flags = STATUS_S.unpack(st)[6]
+    assert flags & StatusFlag.WATCHDOG_TRIP and not flags & StatusFlag.PTT
+    assert "watchdog" in caplog.text
+
+
+def test_version_mismatch_and_text_frames_close_the_link(iq_wav):
+    path, _ = iq_wav()
+
+    async def run():
+        app = create_app(str(path), STATIC_DIR, center_freq=7048000)
+        async with TestClient(TestServer(app)) as client:
+            ws = await client.ws_connect("/ws")
+            v2 = bytearray(hello())
+            v2[8] = 2
+            await ws.send_bytes(bytes(v2))
+            _, err = await recv_until(ws, MsgType.ERROR)
+            closed = await asyncio.wait_for(ws.receive(), timeout=5)
+
+            ws2 = await client.ws_connect("/ws")
+            await ws2.send_str("SERVER DE CLIENT client=old")
+            closed2 = await asyncio.wait_for(ws2.receive(), timeout=5)
+            return err, closed, closed2
+
+    err, closed, closed2 = asyncio.run(run())
+    assert ERROR_S.unpack(err)[1] == Err.VERSION
+    assert closed.type.name in ("CLOSE", "CLOSED")
+    assert closed2.type.name in ("CLOSE", "CLOSED")

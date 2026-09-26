@@ -8,16 +8,20 @@ The client is plain HTML, CSS, and JavaScript, with no framework and no build st
 
 The neural CW decoder is in active development. Feel free to test it and send feedback.
 
+
 ## Download
 
 Linux & Windows binaries: https://github.com/Guenael/didahSDR/releases
+
+Live test server: https://didahsdr.guenael.ca (only available during the initial testing phase)
+
 
 ## Input Sources
 
 | Source | What it is |
 | --- | --- |
 | Sound card | Stereo I/Q (SoftRock style) at 48 / 96 / 192 kHz |
-| KiwiSDR | Direct connection to a public KiwiSDR server, 12 kHz wide |
+| KiwiSDR | Direct connection to a public KiwiSDR server, 12 kHz wide. Enter its URL and press Connect (no autostart) |
 | RTL-SDR | RTL2832U + R820T/R820T2 over WebUSB, decimated to 192 kHz |
 | IC-7300 | The radio's 12 kHz USB IF, CI-V (Web Serial) for the VFO & CW keying |
 | Replay | A remote or local Python server that loops a WAV file over a WebSocket |
@@ -62,6 +66,7 @@ The decoder runs a small ONNX model with onnxruntime-web in a worker.
 
 Without the runtime the rest of the radio still works, and the decoder window shows **NO MODEL** with the reason.
 
+
 ## Container usage
 
 ```bash
@@ -71,6 +76,7 @@ podman run --rm -p 9000:9000 -v ./samples:/home/app/samples:ro,Z localhost/didah
 ```
 
 Arguments after the image name go to the server. The image runs as an unprivileged user and includes onnxruntime-web; `app/models/` is copied in when it exists in the build context. Docker works the same way.
+
 
 ## Desktop application (Linux and Windows)
 
@@ -111,7 +117,8 @@ The application is primarily designed to be used with a mouse.
 | ← / → , Home / End | Zoom out / in, zoom min / max |
 | + / − | Change the tuning step (10 Hz to 5 kHz) |
 | Enter | Arm/disarm PTT (CW) |
-| F8 / F9 / F4 | Dit paddle / dah paddle (iambic A or B) / straight key |
+| F8 / F9 / F7 | Dit paddle / dah paddle (iambic A or B) / straight key |
+| F1 to F4 | CW macros (QSO / QSO ANS / TEST sets, macro bar); report macros write the logbook (ADIF export) |
 | Esc | Close the help |
 
 ### Transmit (CW)
@@ -120,11 +127,26 @@ CW transmit works with the IC-7300 only, for now.
 
 Press the PTT button (bottom left) and type in the text area. Enter toggles PTT.
 
-Iambic keying uses F8 (dit), F9 (dah), and F4 (straight key). The keying delay is still too long.
+Iambic keying uses F8 (dit), F9 (dah), and F7 (straight key). The keying delay is still too long.
 
 ### Recording decoder clips
 
 **REC** in the decoder window saves the decoder input with a sidecar, for labelling and model evaluation.
+
+**REC** in the bottom bar (next to AGC, yellow while recording) saves the demodulated audio only, as a mono WAV named
+`didahSDR_YYYYMMDD_HHMMSSZ_<dial Hz>_AUDIO.wav` (60 min cap; a channel-rate change ends the file).
+The camera button next to it saves the waterfall as shown (ruler, and the QRSS card and ticks) as
+`didahSDR_YYYYMMDD_HHMMSSZ_<dial Hz>_WF.png` (`_QRSS.png` in QRSS mode).
+
+The gear after F4 opens the macro editor: label and text of the 12 macros (QSO, QSO ANS, TEST), saved in
+the browser as you type, with JSON export / import (`didahSDR-macros`) and Defaults. `<LOG>` in a
+text writes a logbook entry and `<INC>` adds 1 to the serial (neither is sent); the editor tags them LOG / +NR.
+
+### Squelch
+
+The squelch threshold (0–30 dB) is the channel (S+N)/N, the same dB as the SNR meter. The noise reference is read off
+the spectrum around the channel, outside the passband (Rocky-style), and is shared with the AGC knee, so a long carrier
+or dense keying cannot raise it.
 
 
 ## Architecture
@@ -137,7 +159,7 @@ Browser (vanilla JS, WebGL, Web Audio, Workers)
 │    │            └── tap after the channel filter → CW decoder worker (front end + stateless ONNX call)
 │    └── video: ring → window → FFT → dB → [CW filter] → WebGL waterfall, S-meter
 │
-▼ WebSocket /ws: text handshake + config JSON, then 0x03 + int16 interleaved IQ every 25 ms
+▼ WebSocket /ws: didahSDR protocol v1 (HELLO / DEVICE_INFO / STATUS, RX_IQ int16 every 25 ms, TX_IQ)
 Python server (aiohttp, standard library only otherwise)
 └── WavIQLooper: any-size WAV, looped with a bounded (~16 MB) threaded read-ahead
 ```
@@ -145,7 +167,7 @@ Python server (aiohttp, standard library only otherwise)
 - Demodulation runs at one channel rate near 12 kHz (`demodulator.js`), so the selectivity does not depend on the source rate. USB/LSB passbands are in `modes.js`.
 - Performance: `node scripts/bench.js` prints the CPU cost of the hot paths. They all stay within a few percent of one core, which is why the DSP is plain JavaScript and not WebAssembly.
 
-The server's `/ws` protocol follows the OpenWebRX handshake (`SERVER DE CLIENT` / `CLIENT DE SERVER`). The client also sends `dspcontrol` JSON for a future live backend; the replay server ignores it.
+The `/ws` link is the versioned binary didahSDR protocol v1 (`docs/protocol.md`), the same one the planned STM32 transceiver will speak. The replay server simulates that device: fixed centre, and CW sent from the app arrives as TX_IQ, is measured (power, SWR 1.2 shown in the status bar) and logged on the console (`TX enabled` / `TX released`), never radiated.
 
 
 ## Development
@@ -174,14 +196,25 @@ tests/               Test suite, pytest (server) / tests/js (node --test)
 scripts/             fetch_ort.sh, convert_palette.py, bench.js
 ```
 
+
 ## Roadmap & Next features
 
-- IQ amplitude/phase imbalance correction for sound-card IQ.
+- IQ amplitude/phase imbalance correction for sound-card IQ (and DC block)
+- Advanced NN Noise Reduction
+- RTTY encoder/decoder
+- WSPR module
+- FT8 module (unsure, on this one...)
+- Opt. PSK-31, Olivia, Contestia
+- Possible new protocol for fun?
 - Mono sound-card source (a transceiver's audio output, about 4 kHz wide).
+- Use a sidebar instead of the the bottom bar (eval)
+
 
 ## Author
 
-- **Guenael** - *Initial Concept & DSP Algorithms*
+- **Guenael** - *Initial Concept, DSP Algorithms & neural models*
+- **Claude** - *Build all the JS/CSS/HTML*
+
 
 ## License
 

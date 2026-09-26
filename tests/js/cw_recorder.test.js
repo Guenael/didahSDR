@@ -139,3 +139,33 @@ test('a draining clip is saved on timeout, and a reset saves it at once', async 
     assert.equal(saved.length, 2);
     assert.equal(rec.draining, false);
 });
+
+test('AudioRecorder: name format, mono int16 WAV, cap and rate-change stop', async () => {
+    const { AudioRecorder, audioRecName, didahFileName } = require('../../app/js/cw_recorder.js');
+    const date = new Date(Date.UTC(2012, 1, 19, 18, 13, 14));
+    assert.equal(audioRecName(date, 21048000.4), 'didahSDR_20120219_181314Z_21048000_AUDIO');
+    assert.equal(didahFileName(date, 10140100, 'QRSS'), 'didahSDR_20120219_181314Z_10140100_QRSS');   // screenshot
+
+    const rec = new AudioRecorder(2);
+    let clip = null;
+    rec.onStop = (c) => { clip = c; };
+    rec.start({ rate: 12000, dialHz: 7018000, date });
+    const buf = new Float32Array(9000).fill(0.5);
+    for (let k = 0; k < 3; k++) rec.pushAudio(buf, 12000);
+    assert.equal(rec.recording, false);   // 27000 samples > 2 s cap
+    assert.equal(clip.reason, 'limit');
+    assert.equal(clip.name, 'didahSDR_20120219_181314Z_7018000_AUDIO');
+    const bytes = new DataView(await clip.blob.arrayBuffer());
+    assert.equal(bytes.getUint16(22, true), 1);          // mono
+    assert.equal(bytes.getUint32(24, true), 12000);      // rate
+    assert.equal(bytes.getUint32(40, true), 27000 * 2);  // data size
+    assert.equal(clip.blob.size, 44 + 27000 * 2);
+    assert.equal(bytes.getInt16(44, true), 16384);
+
+    rec.start({ rate: 12000, dialHz: 7018000, date });
+    rec.pushAudio(buf, 12000);
+    rec.pushAudio(buf, 11025);
+    assert.equal(clip.reason, 'rate');
+    assert.equal(clip.seconds, 9000 / 12000);
+    assert.equal(rec.stop(), null);
+});

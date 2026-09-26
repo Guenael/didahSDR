@@ -154,9 +154,73 @@ class QrssSpectrum {
     }
 }
 
+/** Candidate spacings of the QRSS elapsed-time ticks, seconds. */
+const QRSS_TICK_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+
+/**
+ * Tick interval for a column duration: the shortest step at least `minPx` columns (= canvas pixels)
+ * apart, so ticks land roughly 80-150 px apart. Falls back to the longest step.
+ */
+function qrssTickSeconds(colSec, minPx = 80) {
+    const steps = QRSS_TICK_STEPS;
+    if (!(colSec > 0)) return steps[steps.length - 1];
+    for (let i = 0; i < steps.length; i++) {
+        if (steps[i] / colSec >= minPx) return steps[i];
+    }
+    return steps[steps.length - 1];
+}
+
+/** 0.68 -> "0.68 s", 5.46 -> "5.5 s", 30 -> "30 s", 60 -> "1 min", 90 -> "1 min 30 s". */
+function formatQrssDuration(sec) {
+    const s = Number(sec);
+    if (!Number.isFinite(s) || s < 0) return '--';
+    if (s < 1) return `${s.toFixed(2)} s`;
+    if (s < 60) return Number.isInteger(s) ? `${s} s` : `${s.toFixed(1)} s`;
+    const whole = Math.round(s);
+    const m = Math.floor(whole / 60);
+    const r = whole % 60;
+    return r ? `${m} min ${r} s` : `${m} min`;
+}
+
+/** 14047900 -> "14 047.900 kHz" (Hz resolution, space-grouped kHz). */
+function formatQrssFreq(hz) {
+    const v = Math.round(Number(hz));
+    if (!Number.isFinite(v)) return '--';
+    const abs = Math.abs(v);
+    const khz = String(Math.floor(abs / 1000)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    const frac = String(abs % 1000).padStart(3, '0');
+    return `${v < 0 ? '-' : ''}${khz}.${frac} kHz`;
+}
+
+/** Epoch ms -> "2026-09-26 18:13:14Z". */
+function formatQrssUtc(ms) {
+    const iso = new Date(ms).toISOString();
+    return `${iso.slice(0, 10)} ${iso.slice(11, 19)}Z`;
+}
+
+/**
+ * Centre of the QRSS band. The demodulator NCO shifts by offset + passband centre (0 in CW,
+ * (low + high) / 2 in USB/LSB), so the QRSS tap is centred there, not on the dial.
+ */
+function qrssCenterFreq(tunedFreq, modulation) {
+    const m = typeof MODES !== 'undefined' ? MODES[modulation] : null;
+    return m && m.low !== null ? tunedFreq + (m.low + m.high) / 2 : tunedFreq;
+}
+
 if (typeof globalThis !== 'undefined') {
+    globalThis.QRSS_TICK_STEPS = QRSS_TICK_STEPS;
+    globalThis.qrssTickSeconds = qrssTickSeconds;
+    globalThis.formatQrssDuration = formatQrssDuration;
+    globalThis.formatQrssFreq = formatQrssFreq;
+    globalThis.formatQrssUtc = formatQrssUtc;
+    globalThis.qrssCenterFreq = qrssCenterFreq;
     globalThis.QrssSpectrum = QrssSpectrum;
     globalThis.QRSS_SIZES = QRSS_SIZES;
     globalThis.QRSS_VIEW_HZ = QRSS_VIEW_HZ;
 }
-if (typeof module !== 'undefined') module.exports = { QrssSpectrum, QRSS_SIZES, QRSS_VIEW_HZ };
+if (typeof module !== 'undefined') {
+    module.exports = {
+        QrssSpectrum, QRSS_SIZES, QRSS_VIEW_HZ, QRSS_TICK_STEPS,
+        qrssTickSeconds, formatQrssDuration, formatQrssFreq, formatQrssUtc, qrssCenterFreq
+    };
+}

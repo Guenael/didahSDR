@@ -5,7 +5,7 @@
  */
 
 function bindUi(ctx) {
-    const { state, demodulator, waterfall, audioPlayer, smeter, clientFft, cwFilter, cwDecoder, cwRecorder } = ctx;
+    const { state, demodulator, waterfall, audioPlayer, smeter, clientFft, cwFilter, cwDecoder, cwRecorder, audioRecorder } = ctx;
     const byId = (id) => document.getElementById(id);
     const src = () => ctx.source;
 
@@ -77,11 +77,49 @@ function bindUi(ctx) {
         updateRecUi();
     }).catch(() => {});
 
+    // ---- Bottom-bar audio REC -------------------------------------------------------------------
+    const audioRecBtn = byId('audio-rec-btn');
+    let audioRecTimer = null;
+
+    function updateAudioRecUi() {
+        if (!audioRecBtn) return;
+        const on = audioRecorder.recording;
+        const s = Math.floor(audioRecorder.seconds);
+        audioRecBtn.textContent = on ? `● ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : 'REC';
+        audioRecBtn.classList.toggle('recording', on);
+        audioRecBtn.disabled = !on && !state.running;
+        if (on && !audioRecTimer) audioRecTimer = setInterval(updateAudioRecUi, 250);
+        if (!on && audioRecTimer) { clearInterval(audioRecTimer); audioRecTimer = null; }
+    }
+    audioRecorder.onStop = (clip) => {
+        if (clip.seconds > 0) downloadBlob(`${clip.name}.wav`, clip.blob);
+        updateAudioRecUi();
+    };
+    if (audioRecBtn) {
+        audioRecBtn.addEventListener('click', () => {
+            if (audioRecorder.recording) audioRecorder.stop('user');
+            else if (state.running) audioRecorder.start({ rate: demodulator.audioRate, dialHz: ctx.currentDialHz() });
+            updateAudioRecUi();
+        });
+    }
+    ctx.updateAudioRecUi = updateAudioRecUi;
+    updateAudioRecUi();
+
+    // Waterfall screenshot (PNG, what is on screen incl. ruler and the QRSS card)
+    const snapBtn = byId('wf-snap-btn');
+    if (snapBtn) {
+        snapBtn.addEventListener('click', () => {
+            const name = didahFileName(new Date(), ctx.currentDialHz(), state.qrssEnabled ? 'QRSS' : 'WF');
+            waterfall.snapshot().toBlob((blob) => { if (blob) downloadBlob(`${name}.png`, blob); }, 'image/png');
+        });
+    }
+
     // ---- Power, audio, mode ---------------------------------------------------------------------
     const powerBtn = byId('power-btn');
     const rxBtn = byId('rx-btn');
     powerBtn.addEventListener('click', () => {
         state.running = !state.running;
+        updateAudioRecUi();
         powerBtn.classList.toggle('active', state.running);
         if (rxBtn) rxBtn.classList.toggle('active', state.running && ctx.isActiveConnected());
         if (state.running) {
@@ -90,10 +128,11 @@ function bindUi(ctx) {
             else ctx.sources.restartRtlIfIdle();
         } else {
             ctx.onTxPowerOff();
+            audioRecorder.stop('power');
             audioPlayer.stop();
             smeter.reset();
             ctx.disconnectTransports();
-            ctx.syncIc7300Key();
+            ctx.syncKeyLines();
             ctx.updateTrxLeds();
         }
     });
@@ -318,8 +357,15 @@ function bindUi(ctx) {
     ctx.setCwFilterEnabled = toggleButton('cw-filter-toggle', 'filterEnabled', 'CW Filter', (on) => {
         cwFilter.enabled = on;
         // Flat-top keeps a keyed carrier's level honest; the click filter sharpens it back.
-        clientFft.initWindow(on ? 'flattop' : 'bh4');
+        clientFft.initWindow(on ? 'flattop' : state.fftWindow);
+        const winSel = byId('fft-window-select');
+        if (winSel) winSel.disabled = on;
     });
+    byId('fft-window-select').addEventListener('change', (e) => {
+        state.fftWindow = FFT_WINDOWS.indexOf(e.target.value) >= 0 ? e.target.value : 'bh4';
+        if (!state.filterEnabled) clientFft.initWindow(state.fftWindow);
+    });
+    byId('fft-window-select').disabled = state.filterEnabled;
     // The pipeline owns the QRSS state flag; the button only mirrors it.
     const qrssBtn = byId('qrss-toggle');
     ctx.setQrssEnabled = (on) => {
@@ -366,7 +412,7 @@ function bindUi(ctx) {
             closeHelp();
             return;
         }
-        if (e.key === 'Enter' || PADDLE_KEYS[e.key]) return;   // tx_controller.js
+        if (e.key === 'Enter' || PADDLE_KEYS[e.key] || MACRO_KEYS[e.key] !== undefined) return;   // tx_controller.js
 
         // Don't intercept if the user is typing in a form input; the dial owns digits and arrow keys
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;

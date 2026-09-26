@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { floatIq } = require('./load.js');
+const { floatIq, gaussSource } = require('./load.js');
 
 const RATE = 48000;
 
@@ -104,7 +104,7 @@ test('NR reduces white noise more than a tone and reuses the buffer', () => {
 });
 
 test('squelch stays closed on noise and opens on a tone above the floor', () => {
-    const floor = 1e-3;   // AGC-style amplitude floor → -60 dBFS
+    const floor = 1e-6;   // noise power (audio²) → -60 dBFS
     const sq = new DidahSquelch(RATE);
     sq.setEnabled(true);
     sq.setMarginDb(10);
@@ -163,8 +163,61 @@ test('through the demodulator, squelch stays shut on band noise and opens on CW'
     assert.ok(sig.squelch.open, 'medium CW should open at 10 dB margin');
 });
 
+/**
+ * 10 s through the real demodulator at 96 kHz, CW 150 Hz: complex white noise plus an optional carrier whose
+ * power is `snrDb` above the noise power in the channel. Returns the open fraction of 25 ms packets from 50 ms on.
+ */
+function squelchOpenFraction({ snrDb = null, margin, pattern = null, wpm = 30, seconds = 10 }) {
+    const IQ = 96000, OFF = 3000, sig = 1e-3, n = 2400;
+    const g = gaussSource(7);
+    const d = new DidahDemodulator(IQ);
+    d.setModulation('cw');
+    d.setOffsetFrequency(OFF);
+    d.setSquelchEnabled(true);
+    d.setSquelchMarginDb(margin);
+    // Channel noise power in the complex baseband: 2σ²/decim · Σh². Carrier power A² (both before Re()).
+    const amp = snrDb == null ? 0 : Math.sqrt(Math.pow(10, snrDb / 10) * ((2 * sig * sig) / d.decim) * d.noiseEst.sumH2);
+    const dit = 1.2 / wpm, w = (2 * Math.PI * OFF) / IQ, iq = new Float32Array(2 * n);
+    let open = 0, total = 0;
+    for (let p = 0; p < seconds * 40; p++) {
+        for (let i = 0; i < n; i++) {
+            const k = p * n + i;
+            const on = !pattern || pattern[Math.floor(k / IQ / dit) % pattern.length] === '1';
+            const a = on ? amp : 0;
+            iq[2 * i] = a * Math.cos(w * k) + sig * g();
+            iq[2 * i + 1] = a * Math.sin(w * k) + sig * g();
+        }
+        d.process(iq, n);
+        if (p >= 2) { total++; if (d.squelch.open) open++; }
+    }
+    return open / total;
+}
+
+test('squelch at 17 dB stays open on a steady 30 dB SNR carrier (noise read off-channel)', () => {
+    const f = squelchOpenFraction({ snrDb: 30, margin: 17 });
+    assert.ok(f >= 0.99, `open ${(100 * f).toFixed(1)} % of the time`);
+});
+
+test('squelch at 17 dB stays open on dense 30 WPM CW at 30 dB SNR', () => {
+    const f = squelchOpenFraction({ snrDb: 30, margin: 17, pattern: '1110101110100011101011101110001' });
+    assert.ok(f >= 0.99, `open ${(100 * f).toFixed(1)} % of the time`);
+});
+
+test('squelch at 3 dB stays closed on pure noise', () => {
+    const f = squelchOpenFraction({ margin: 3 });
+    assert.ok(f <= 0.05, `open ${(100 * f).toFixed(1)} % of the time`);
+});
+
+test('squelch margin clamps to 0-30 dB', () => {
+    const sq = new DidahSquelch(RATE);
+    sq.setMarginDb(45);
+    assert.equal(sq.marginDb, 30);
+    sq.setMarginDb(-3);
+    assert.equal(sq.marginDb, 0);
+});
+
 test('squelch hang keeps the gate open through a 200 ms CW gap', () => {
-    const floor = 1e-3;
+    const floor = 1e-6;
     const sq = new DidahSquelch(RATE);
     sq.setEnabled(true);
     sq.setHangForMode('cw');
