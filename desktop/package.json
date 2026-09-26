@@ -1,0 +1,61 @@
+{
+  "name": "didahsdr",
+  "version": "0.8.3",
+  "description": "didahSDR desktop shell. Live IQ sources in a self-contained window. The Python replay server is not included.",
+  "author": "Guenael",
+  "license": "AGPL-3.0-or-later",
+  "private": true,
+  "main": "main.js",
+  "desktopName": "didahSDR.desktop",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Guenael/didahSDR.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "fetch-ort": "bash ../scripts/fetch_ort.sh",
+    "dist:linux": "npm run fetch-ort && electron-builder --linux AppImage",
+    "dist:win": "npm run fetch-ort && electron-builder --win zip"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "radio.didah.sdr",
+    "productName": "didahSDR",
+    "executableName": "didahSDR",
+    "publish": null,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "static_server.js",
+      "icon.png",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../app",
+        "to": "app"
+      }
+    ],
+    "linux": {
+      "target": "AppImage",
+      "icon": "icon.png",
+      "category": "AudioVideo",
+      "synopsis": "Software Defined Radio for CW operators",
+      "syncDesktopName": true
+    },
+    "win": {
+      "target": "zip",
+      "icon": "icon.png",
+      "signAndEditExecutable": false
+    }
+  },
+  "allowScripts": {
+    "electron@37.10.3": true,
+    "electron-winstaller@5.4.0": true
+  }
+}

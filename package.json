@@ -6,7 +6,7 @@
   "scripts": {
     "lint": "eslint app/js tests scripts eslint.config.js",
     "bench": "node scripts/bench.js",
-    "test": "node --test tests/js/"
+    "test": "node --test tests/js/*.test.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

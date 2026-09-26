@@ -91,7 +91,7 @@ test('a missing model keeps the decoder off and says why', () => {
     const status = { textContent: '', className: '', title: '' };
     const demod = { tapCallback: null };
     const dec = new CWDecoder(demod, { output: null, status });
-    dec.setMissing('models/didahcw.onnx not installed (see README)');
+    dec.setMissing('models/didahcw_v1_rc1.onnx not installed (see README)');
     dec.start(12000);
     assert.equal(dec.active, false);
     assert.equal(dec.worker, null);

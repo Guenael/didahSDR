@@ -12,6 +12,9 @@ const CwTapResampler = (typeof globalThis !== 'undefined' && globalThis.ComplexP
     ? globalThis.ComplexPolyphase
     : require('./resampler.js').ComplexPolyphase;
 
+const CW_MODEL_FILE = 'models/didahcw_v1_rc1.onnx';
+const CW_MODEL_META = 'models/didahcw_v1_rc1.onnx.json';
+
 const CW_HIGHLIGHT = {
     exchange: /^(5NN|599|57N|579|58N|589|55N|559|56N|569|EN|TU|TNX|TKS)$/,
     keyword: /^(CQ|TEST|DE|BK|73|88|UR|CFM|KN|SK|AR|QRZ|QRL|QTH|QSL|QSB|QRM|QRN|OP|ES|FB|GA|GE|GM|GL|CUL|OM|YL|RST|AGN|PSE|HW|RIG|ANT|WX|DX|=|\+)$/,
@@ -113,8 +116,8 @@ class CWDecoder {
                 type: 'init', rate,
                 ortUrl: new URL('lib/ort.wasm.min.js', document.baseURI).href,
                 wasmPath: new URL('lib/', document.baseURI).href,
-                modelUrl: new URL('models/didahcw.onnx', document.baseURI).href,
-                metaUrl: new URL('models/didahcw.onnx.json', document.baseURI).href,
+                modelUrl: new URL(CW_MODEL_FILE, document.baseURI).href,
+                metaUrl: new URL(CW_MODEL_META, document.baseURI).href,
             });
             this.modelState = 'loading';
             this.modelDetail = '';

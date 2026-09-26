@@ -2,7 +2,7 @@
 /**
  * Loads the browser DSP modules into Node in the same order as app/index.html, exposing the
  * globals the modules expect (they are plain <script> globals in the browser).
- * Run the suite with: node --test tests/js/
+ * Run the suite with: node --test tests/js/*.test.js
  */
 const path = require('path');
 const fs = require('fs');

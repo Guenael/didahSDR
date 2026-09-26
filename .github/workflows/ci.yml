@@ -41,7 +41,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
-      - run: node --test tests/js/
+      - run: node --test tests/js/*.test.js
 
   docker:
     name: Container image (build and smoke run)
@@ -55,6 +55,7 @@ jobs:
         run: docker build -t didahsdr:ci .
       - name: Synthetic IQ recording (none is shipped)
         run: |
+          pip install pytest
           mkdir -p ci-samples
           python -c "from pathlib import Path; from tests.conftest import write_iq_wav; write_iq_wav(Path('ci-samples/synth.wav'), bytes(96000 * 4))"
       - name: Run and probe

@@ -37,9 +37,13 @@ tmp/*
 # Exclude the samples directory containing large WAV files
 samples/*.wav
 
-# Exclude models from GitHub (because of the size of the models)
+# onnxruntime-web is produced by scripts/fetch_ort.sh and is not committed.
 app/lib/
+
+# Local model experiments stay untracked. The release-candidate weights are committed.
 app/models/*
+!app/models/didahcw_v1_rc1.onnx
+!app/models/didahcw_v1_rc1.onnx.json
 
 # Exclude LLM stuff
 CLAUDE.md
