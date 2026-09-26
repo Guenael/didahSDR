@@ -27,7 +27,7 @@ jobs:
         working-directory: desktop
         run: npm ci
 
-      # Artifact names and the in-app title follow the tag (v0.8.3 -> didahSDR-0.8.3.AppImage).
+      # Artifact names and the in-app title follow the tag 
       - name: Version from tag
         working-directory: desktop
         run: |

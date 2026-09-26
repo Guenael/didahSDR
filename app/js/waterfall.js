@@ -6,7 +6,7 @@
  * - Right-to-left scrolling (Time on X axis, Frequency on Y axis).
  * - Ring texture with hardware linear interpolation for judder-free sub-pixel scrolling.
  * - Dedicated vertical frequency ruler on the right edge.
- * - Passband highlighting with the reversed primary colormap (CW centred; USB above; LSB below).
+ * - Passband highlighting with the stored reverse of the primary colormap (CW centred; USB above; LSB below).
  * - Dynamic real-time brightness & contrast adjustment across the entire waterfall history.
  * - Real-time full-history vertical zoom & pan with Ctrl + wheel / Ctrl + left-drag, centred on cursor.
  * - Mouse Wheel tuning by selected step; Shift+wheel / Shift+left-drag pans the frequency window; Ctrl+wheel zooms.
@@ -15,6 +15,13 @@
  * - requestAnimationFrame render loop that only draws when a slice arrived or the view changed
  *   (dirty flag), so an idle or powered-off receiver costs no GPU time. FPS counts real draws.
  */
+
+/** Passband LUT id: the stored reverse of the selected theme, or the forward table when the theme id is already reversed. */
+function passbandThemeId(theme) {
+    const suffix = '.reversed()';
+    const src = theme || 'viridis';
+    return src.endsWith(suffix) ? src.slice(0, -suffix.length) : src + suffix;
+}
 
 class HorizontalWaterfall {
     constructor(container, options = {}) {
@@ -33,10 +40,10 @@ class HorizontalWaterfall {
         this.minLevel = options.minLevel !== undefined ? options.minLevel : -130;
         this.dynamicRange = options.dynamicRange !== undefined ? options.dynamicRange : 60;
 
-        // Colormaps: passband uses the reversed primary theme (synthesized if needed)
+        // Colormaps: passband uses the stored reverse of the primary theme
         this.primaryTheme = options.primaryTheme || 'viridis';
         this.primaryTable = Colormaps.getTable(this.primaryTheme);
-        this.passbandTable = Colormaps.getReversedTable(this.primaryTheme);
+        this.passbandTable = Colormaps.getTable(passbandThemeId(this.primaryTheme));
 
         // Zoom and Pan: default zoom factor to display approximately 30-40 kHz
         // sampleRate (96 kHz) / 2.67 ≈ 36 kHz visible bandwidth
@@ -464,7 +471,7 @@ class HorizontalWaterfall {
     setPrimaryTheme(theme) {
         this.primaryTheme = theme;
         this.primaryTable = Colormaps.getTable(theme);
-        this.passbandTable = Colormaps.getReversedTable(theme);
+        this.passbandTable = Colormaps.getTable(passbandThemeId(theme));
         this.updateColormapTexture();
         this.dirty = true;
     }

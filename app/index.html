@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>didahSDR — Software Defined Radio for CW operators — v0.8.3</title>
+    <title>didahSDR — Software Defined Radio for CW operators — v0.8.4</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="css/dial.css">
     <link rel="stylesheet" href="css/style.css">
@@ -15,7 +15,7 @@
             <div class="top-bar-left">
                 <!-- Power button with I/O symbol -->
                 <button id="power-btn" class="power-btn active" title="Toggle Power / Waterfall / Audio" aria-label="Power">⏻</button>
-                <h1 class="app-title"><span class="title-di">di</span><span class="title-dah">dah</span><span class="title-sdr">SDR</span><span class="title-tagline"> — Software Defined Radio for CW operators — v0.8.3</span></h1>
+                <h1 class="app-title"><span class="title-di">di</span><span class="title-dah">dah</span><span class="title-sdr">SDR</span><span class="title-tagline"> — Software Defined Radio for CW operators — v0.8.4</span></h1>
 
                 <!-- RX / TX Buttons -->
                 <div class="trx-group">
@@ -240,9 +240,9 @@
             </div>
             <div class="smeter-body source-body">
                 <label class="source-option">
-                    <input type="radio" name="iq-source" value="va2gka" checked>
+                    <input type="radio" name="iq-source" value="replay_server" checked>
                     <span class="source-option-text">
-                        <span class="source-option-label">VA2GKA Replay Server</span>
+                        <span class="source-option-label">Replay Server</span>
                         <span class="source-option-meta">96 kHz · 14.048 MHz · local /ws</span>
                     </span>
                 </label>
@@ -408,7 +408,7 @@
                 <div id="vfo-mem-list" class="vfo-mem-list"></div>
                 <div class="vfo-mem-footer">
                     <button type="button" id="vfo-mem-add" class="vfo-mem-add" title="Store the dial frequency as a new row">Add</button>
-                    <button type="button" id="vfo-mem-defaults" class="vfo-mem-add" title="Restore the ARRL Morse practice frequencies">ARRL</button>
+                    <button type="button" id="vfo-mem-defaults" class="vfo-mem-add" title="Restore the ARRL W1AW Morse practice frequencies">ARRL W1AW</button>
                 </div>
                 <div class="vfo-mem-hint">Click tunes the VFO. STO saves the dial.</div>
             </div>
@@ -534,7 +534,7 @@
                         <li><strong>Hover + Mouse Wheel:</strong> Roll any individual digit drum up or down.</li>
                         <li><strong>Left Click on a digit:</strong> Selects the digit cursor. Use <code>Arrow Up/Down</code> to spin the drum or type digits <code>0-9</code>.</li>
                         <li><strong>Right Click on a digit:</strong> Zeroes out all digits to the right (convenient rounding tool).</li>
-                        <li><strong>VFO: button:</strong> Opens the memory list. Click a frequency to recall it. <strong>STO</strong> writes the dial into that row. <strong>Add</strong> appends the dial (up to 24). <strong>ARRL</strong> restores the Morse practice frequencies.</li>
+                        <li><strong>VFO: button:</strong> Opens the memory list. Click a frequency to recall it. <strong>STO</strong> writes the dial into that row. <strong>Add</strong> appends the dial (up to 24). <strong>ARRL W1AW</strong> restores the Morse practice frequencies.</li>
                     </ul>
                 </section>
 

@@ -1,5 +1,5 @@
 # --- STAGE 1: Build ---
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 RUN useradd -g users -m build
 WORKDIR /home/build
@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir --user .
 
 
 # --- STAGE 2: CW decoder runtime (onnxruntime-web) ---
-FROM python:3.12-slim AS ort
+FROM python:3.14-slim AS ort
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get -qq update \
@@ -25,7 +25,7 @@ RUN bash scripts/fetch_ort.sh
 
 
 # --- STAGE 3: Application ---
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 ARG HOST_UID=1000
 ARG HOST_GID=1000

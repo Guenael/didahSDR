@@ -21,23 +21,6 @@ const VFO_MEMORY_DEFAULTS = Object.freeze([
     28067500,
 ]);
 
-/** Amateur segments used only to label a row. Inclusive edges, Hz. */
-const VFO_BANDS = Object.freeze([
-    [1800000, 2000000, '160m'],
-    [3500000, 4000000, '80m'],
-    [5330000, 5410000, '60m'],
-    [7000000, 7300000, '40m'],
-    [10100000, 10150000, '30m'],
-    [14000000, 14350000, '20m'],
-    [18068000, 18168000, '17m'],
-    [21000000, 21450000, '15m'],
-    [24890000, 24990000, '12m'],
-    [28000000, 29700000, '10m'],
-    [50000000, 54000000, '6m'],
-    [144000000, 148000000, '2m'],
-    [420000000, 450000000, '70cm'],
-]);
-
 /** Dial-style grouping: 14047500 → "14.047.500". */
 function formatVfoHz(hz) {
     const n = Math.round(Math.abs(Number(hz)));
@@ -49,15 +32,6 @@ function formatVfoHz(hz) {
         out += s[i];
     }
     return out;
-}
-
-function bandOfHz(hz) {
-    const n = Math.round(Number(hz));
-    for (let i = 0; i < VFO_BANDS.length; i++) {
-        const band = VFO_BANDS[i];
-        if (n >= band[0] && n <= band[1]) return band[2];
-    }
-    return '';
 }
 
 /**
@@ -127,15 +101,10 @@ function setupVfoMemories({
             recall.className = 'vfo-mem-recall';
             recall.title = `Tune the VFO to ${formatVfoHz(hz)} Hz`;
 
-            const band = document.createElement('span');
-            band.className = 'vfo-mem-band';
-            band.textContent = bandOfHz(hz);
-
             const freq = document.createElement('span');
             freq.className = 'vfo-mem-hz';
             freq.textContent = formatVfoHz(hz);
 
-            recall.appendChild(band);
             recall.appendChild(freq);
             recall.addEventListener('click', () => { if (onRecall) onRecall(hz); });
 
@@ -230,7 +199,6 @@ if (typeof module !== 'undefined') {
         VFO_MEMORY_KEY,
         VFO_MEMORY_DEFAULTS,
         formatVfoHz,
-        bandOfHz,
         sanitizeVfoMemories,
         loadVfoMemories,
         setupVfoMemories,

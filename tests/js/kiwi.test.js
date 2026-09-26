@@ -24,8 +24,9 @@ function buildSndFrame({ i = 1000, q = -2000, n = 4, flags = 0x08, seq = 7, smet
     return buf;
 }
 
-test('catalog default is VA2GKA replay; kiwi live defaults to OH5AE on 40 m CW', () => {
-    assert.equal(SOURCES[0].id, 'va2gka');
+test('catalog default is the replay server; kiwi live defaults to OH5AE on 40 m CW', () => {
+    assert.equal(SOURCES[0].id, 'replay_server');
+    assert.equal(SOURCES[0].label, 'Replay Server');
     assert.equal(SOURCES[0].protocol, 'didah');
     const live = findSource('oh5ae');
     assert.equal(live.protocol, 'kiwi');
@@ -35,7 +36,7 @@ test('catalog default is VA2GKA replay; kiwi live defaults to OH5AE on 40 m CW',
     assert.equal(live.startFreq, 7018000);
     assert.equal(live.startFreq, KIWI_CW_HZ);
     assert.equal(live.startMod, 'cw');
-    assert.equal(findSource('missing').id, 'va2gka');
+    assert.equal(findSource('missing').id, 'replay_server');
     assert.equal(findSource('soundcard').protocol, 'soundcard');
     assert.equal(findSource('soundcard').startFreq, 0);
 });

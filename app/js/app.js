@@ -35,7 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
         filterKernel: 'medium',
         agcSpeed: 'medium',
         userHasTuned: false,  // once true, the server's start_freq is no longer applied
-        selectedSourceId: 'va2gka',
+        selectedSourceId: 'replay_server',
         ic7300RadioHz: 0,
         ic7300Mode: null,
         ic7300Filter: 1,
@@ -143,7 +143,7 @@ document.addEventListener('DOMContentLoaded', () => {
     ctx.sources.bindSourceControls();
 
     const checked = document.querySelector('input[name="iq-source"]:checked');
-    const startId = (checked && checked.value) || 'va2gka';
+    const startId = (checked && checked.value) || 'replay_server';
     if (startId !== ctx.source.id) ctx.selectSource(startId, false);
     else ctx.updateSourceStatus();
 

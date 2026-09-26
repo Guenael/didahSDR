@@ -130,7 +130,8 @@ function appSettingsFields(ctx) {
             name: 'selectedSourceId',
             save: () => state.selectedSourceId,
             load: (v) => {
-                const id = v === 'f4kiy' ? 'oh5ae' : v;   // the Kiwi preset used to be F4KIY
+                // f4kiy was the Kiwi preset id; va2gka was the replay source id.
+                const id = v === 'f4kiy' ? 'oh5ae' : v === 'va2gka' ? 'replay_server' : v;
                 const el = id && document.querySelector(`input[name="iq-source"][value="${id}"]`);
                 if (el) el.checked = true;
             }

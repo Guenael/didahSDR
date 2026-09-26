@@ -12,12 +12,19 @@ test('every colormap has a 256-entry packed table with opaque alpha', () => {
     }
 });
 
-test('getReversedTable reverses, and reversing a reversed id gives the forward table', () => {
-    const fwd = Colormaps.getTable('inferno');
-    const rev = Colormaps.getReversedTable('inferno');
-    assert.equal(rev[0], fwd[255]);
-    assert.equal(rev[255], fwd[0]);
-    assert.equal(Colormaps.getReversedTable('PuBu.reversed()'), Colormaps.getTable('PuBu'));
+test('every theme has a stored reverse, and a reversed id pairs back to the forward table', () => {
+    const suffix = '.reversed()';
+    for (const { id } of Colormaps.list()) {
+        const fwd = Colormaps.getTable(id);
+        const revId = id.endsWith(suffix) ? id.slice(0, -suffix.length) : id + suffix;
+        const rev = Colormaps.getTable(revId);
+        assert.equal(rev.length, 256, revId);
+        assert.equal(rev[0], fwd[255], id);
+        assert.equal(rev[255], fwd[0], id);
+        assert.notEqual(rev, fwd);
+    }
+    assert.equal(Colormaps.list().some((t) => t.id === 'viridis.reversed()'), false);
+    assert.equal(Colormaps.list().some((t) => t.id === 'PuBu.reversed()'), true);
 });
 
 test('getRgb agrees with the packed ABGR table', () => {
