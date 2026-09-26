@@ -2,7 +2,7 @@
  * didahSDR - CW decoder worker.
  *
  * Receives channel-filtered complex baseband chunks from cw_decoder.js, runs the streaming front end
- * (cw_frontend.js) and the ONNX model (models/didahcw.onnx) with onnxruntime-web, and posts decoded text.
+ * (cw_frontend.js) and the ONNX model (models/didahcw_v1_rc1.onnx) with onnxruntime-web, and posts decoded text.
  *
  * Inference is stateless and fixed-length: every time 50 new frames exist, the model sees
  * T = leftContext + 50 + lookahead frames and emits only those 50. Each frame is decoded once.

@@ -66,13 +66,13 @@ function bindUi(ctx) {
     }
     ctx.updateDecoderActive = updateDecoderActive;
 
-    // The model and onnxruntime-web are not in git (README, "CW decoder assets").
+    // The weights are app/models/didahcw_v1_rc1.onnx. onnxruntime-web is vendored by scripts/fetch_ort.sh.
     Promise.all([
-        fetch('models/didahcw.onnx', { method: 'HEAD' }),
+        fetch(CW_MODEL_FILE, { method: 'HEAD' }),
         fetch('lib/ort.wasm.min.js', { method: 'HEAD' })
     ]).then(([model, ort]) => {
         if (model.ok) modelStamp = model.headers.get('last-modified');
-        if (!model.ok) cwDecoder.setMissing('models/didahcw.onnx not installed (see README)');
+        if (!model.ok) cwDecoder.setMissing(CW_MODEL_FILE + ' not installed (see README)');
         else if (!ort.ok) cwDecoder.setMissing('onnxruntime-web missing: run scripts/fetch_ort.sh');
         updateRecUi();
     }).catch(() => {});

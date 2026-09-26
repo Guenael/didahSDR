@@ -23,7 +23,7 @@ const CW_FRONTEND_SPEC = {
     binOffset: 16,
     logEps: 1e-6,
     floorAlpha: 0.005,
-    // Context and lookahead are model properties: the worker reads them from models/didahcw.onnx.json.
+    // Context and lookahead are model properties: the worker reads them from models/didahcw_v1_rc1.onnx.json.
 };
 
 class CWFrontend {
