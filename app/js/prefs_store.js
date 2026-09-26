@@ -102,6 +102,7 @@ function appSettingsFields(ctx) {
         control('ssbHigh', 'ssb-high-slider', 'input'),
         control('stepSize', 'step-select', 'change'),
         control('fftSize', 'fft-select', 'change'),
+        control('fftWindow', 'fft-window-select', 'change'),
         control('primaryTheme', 'theme-select', 'change'),
         control('agcSpeed', 'agc-select', 'change'),
         control('filterKernel', 'kernel-select', 'change'),
@@ -130,8 +131,8 @@ function appSettingsFields(ctx) {
             name: 'selectedSourceId',
             save: () => state.selectedSourceId,
             load: (v) => {
-                // f4kiy was the Kiwi preset id; va2gka was the replay source id.
-                const id = v === 'f4kiy' ? 'oh5ae' : v === 'va2gka' ? 'replay_server' : v;
+                // f4kiy then oh5ae were the Kiwi preset id; va2gka was the replay source id.
+                const id = v === 'f4kiy' || v === 'oh5ae' ? 'kiwisdr' : v === 'va2gka' ? 'replay_server' : v;
                 const el = id && document.querySelector(`input[name="iq-source"][value="${id}"]`);
                 if (el) el.checked = true;
             }
@@ -147,6 +148,10 @@ function appSettingsFields(ctx) {
         value('rtlPpm', 'rtlsdr-ppm'),
         value('rtlUpconverter', 'rtlsdr-upconverter'),
         checkbox('rtlBias', 'rtlsdr-bias'),
+        control('myCall', 'my-call-input', 'input'),
+        control('myExtra', 'my-extra-input', 'input'),
+        control('macroMode', 'macro-mode', 'change'),
+        { name: 'contestNr', save: () => state.contestNr, load: (v) => { if (ctx.setContestNr) ctx.setContestNr(v); } },
     ];
 }
 

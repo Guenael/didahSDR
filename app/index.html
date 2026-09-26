@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>didahSDR — Software Defined Radio for CW operators — v0.8.4</title>
+    <title>didahSDR — Software Defined Radio for CW operators — v0.8.5</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="css/dial.css">
     <link rel="stylesheet" href="css/style.css">
@@ -15,7 +15,7 @@
             <div class="top-bar-left">
                 <!-- Power button with I/O symbol -->
                 <button id="power-btn" class="power-btn active" title="Toggle Power / Waterfall / Audio" aria-label="Power">⏻</button>
-                <h1 class="app-title"><span class="title-di">di</span><span class="title-dah">dah</span><span class="title-sdr">SDR</span><span class="title-tagline"> — Software Defined Radio for CW operators — v0.8.4</span></h1>
+                <h1 class="app-title"><span class="title-di">di</span><span class="title-dah">dah</span><span class="title-sdr">SDR</span><span class="title-tagline"> — Software Defined Radio for CW operators — v0.8.5</span></h1>
 
                 <!-- RX / TX Buttons -->
                 <div class="trx-group">
@@ -113,6 +113,23 @@
                 <button id="wconfig-close-btn" class="smeter-close-btn" title="Close Config">✕</button>
             </div>
             <div class="smeter-body wconfig-body">
+                <div class="wconfig-section" id="operator-config-section">
+                    <div class="wconfig-section-title">OPERATOR</div>
+                    <div class="control-group">
+                        <label for="my-call-input">Callsign:</label>
+                        <input id="my-call-input" class="tx-text-input operator-input" type="text" value="MY/CALL" maxlength="14"
+                               spellcheck="false" autocomplete="off" autocapitalize="characters"
+                               title="Your callsign, sent by the &lt;MY_CALL&gt; macro token">
+                    </div>
+                    <div class="control-group">
+                        <label for="my-extra-input">Extra:</label>
+                        <input id="my-extra-input" class="tx-text-input operator-input" type="text" value="" maxlength="32"
+                               spellcheck="false" autocomplete="off" autocapitalize="characters"
+                               placeholder="Contest exchange, e.g. &lt;NR&gt; or ON"
+                               title="Contest exchange sent by &lt;MY_EXTRA&gt; (TEST F3 by default). &lt;NR&gt; is the serial counter.">
+                    </div>
+                </div>
+
                 <div class="wconfig-section">
                     <div class="wconfig-section-title">WATERFALL</div>
                     <div class="control-group slider-container">
@@ -136,6 +153,16 @@
                             <option value="1024">Separation</option>
                             <option value="2048" selected>Balanced</option>
                             <option value="4096">Resolution</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="fft-window-select">FFT Window:</label>
+                        <select id="fft-window-select" class="select-input" title="FFT window while the CW filter is off (the CW filter forces flat-top)">
+                            <option value="bh4" selected>Blackman-Harris</option>
+                            <option value="blackman">Blackman</option>
+                            <option value="hann">Hann</option>
+                            <option value="hamming">Hamming</option>
+                            <option value="rect">Rectangular</option>
                         </select>
                     </div>
                     <div class="control-group">
@@ -201,7 +228,7 @@
                     </div>
                     <div class="control-group fx-row">
                         <button id="squelch-toggle" class="toggle-btn" title="Mute the speaker until the channel is this many dB above the noise floor">Squelch: OFF</button>
-                        <input id="squelch-thr-slider" type="range" min="0" max="40" step="1" value="10" autocomplete="off" aria-label="Squelch margin">
+                        <input id="squelch-thr-slider" type="range" min="0" max="30" step="1" value="10" autocomplete="off" aria-label="Squelch margin">
                         <span id="squelch-thr-val" class="slider-val">10 dB</span>
                     </div>
                 </div>
@@ -369,7 +396,7 @@
                 </div>
                 <div class="source-option source-option-kiwi">
                     <label class="source-option-head">
-                        <input type="radio" name="iq-source" value="oh5ae">
+                        <input type="radio" name="iq-source" value="kiwisdr">
                         <span class="source-option-text">
                             <span class="source-option-label">KiwiSDR Server</span>
                             <span class="source-option-meta">12 kHz IQ · paste the receiver URL</span>
@@ -377,9 +404,9 @@
                     </label>
                     <div class="source-kiwi-fields">
                         <div class="source-kiwi-row">
-                            <input type="text" id="kiwi-url" class="source-url-input" value="http://oh5ae.dyndns.org:8073"
+                            <input type="text" id="kiwi-url" class="source-url-input" value=""
                                    spellcheck="false" autocomplete="off" autocapitalize="off" inputmode="url"
-                                   placeholder="http://oh5ae.dyndns.org:8073" aria-label="KiwiSDR URL">
+                                   placeholder="http://server:port" aria-label="KiwiSDR URL" title="http://server:port">
                             <button type="button" id="kiwi-connect-btn" class="source-connect-btn" title="Connect to this KiwiSDR">Connect</button>
                         </div>
                         <p id="kiwi-url-hint" class="source-url-hint">
@@ -411,6 +438,58 @@
                     <button type="button" id="vfo-mem-defaults" class="vfo-mem-add" title="Restore the ARRL W1AW Morse practice frequencies">ARRL W1AW</button>
                 </div>
                 <div class="vfo-mem-hint">Click tunes the VFO. STO saves the dial.</div>
+            </div>
+        </div>
+
+        <!-- MACRO EDITOR (F1-F4 of the three sets; see js/macros.js) -->
+        <div id="macro-editor-window" class="smeter-window macro-editor-window" style="display: none;">
+            <div id="macro-editor-header" class="smeter-header">
+                <div class="smeter-title">
+                    <span class="smeter-drag-icon">⋮⋮</span>
+                    <span>MACROS</span>
+                </div>
+                <button id="macro-editor-close-btn" class="smeter-close-btn" title="Close the macro editor">✕</button>
+            </div>
+            <div class="smeter-body macro-editor-body">
+                <div id="macro-editor-sections" class="macro-ed-sections"></div>
+                <div class="vfo-mem-hint">Tokens: &lt;MY_CALL&gt; &lt;CALLER&gt; &lt;MY_EXTRA&gt; &lt;NR&gt;. Actions (send nothing): &lt;LOG&gt; logs the QSO, &lt;INC&gt; adds 1 to &lt;NR&gt;. Saved in this browser as you type.</div>
+                <div class="logbook-footer">
+                    <span id="macro-editor-status" class="logbook-count"></span>
+                    <button type="button" id="macro-editor-import" class="vfo-mem-add" title="Load macros from a JSON file">Import JSON</button>
+                    <button type="button" id="macro-editor-export" class="vfo-mem-add" title="Download the 12 macros as a JSON file">Export JSON</button>
+                    <button type="button" id="macro-editor-reset" class="vfo-mem-add" title="Restore the default macros">Defaults</button>
+                    <input type="file" id="macro-editor-file" accept=".json,application/json" hidden>
+                </div>
+            </div>
+        </div>
+
+        <!-- LOGBOOK (QSOs logged by the macros, ADIF export; see js/logbook.js) -->
+        <div id="logbook-window" class="smeter-window logbook-window" style="display: none;">
+            <div id="logbook-header" class="smeter-header">
+                <div class="smeter-title">
+                    <span class="smeter-drag-icon">⋮⋮</span>
+                    <span>LOGBOOK</span>
+                </div>
+                <button id="logbook-close-btn" class="smeter-close-btn" title="Close logbook">✕</button>
+            </div>
+            <div class="smeter-body logbook-body">
+                <div class="logbook-scroll">
+                    <table class="logbook-table">
+                        <thead>
+                            <tr>
+                                <th>Call</th><th>Date</th><th>Time (UTC)</th><th>Freq (Hz)</th><th>Mode</th>
+                                <th>RST S</th><th>RST R</th><th>Extra</th><th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="logbook-list"></tbody>
+                    </table>
+                    <div id="logbook-empty" class="vfo-mem-empty">No QSO logged. A macro with &lt;LOG&gt; adds one (by default QSO F4, QSO ANS F2, TEST F3).</div>
+                </div>
+                <div class="logbook-footer">
+                    <span id="logbook-count" class="logbook-count">0 QSOs</span>
+                    <button type="button" id="logbook-export" class="vfo-mem-add" title="Download the log as an ADIF 3.1.4 file">Export ADIF</button>
+                    <button type="button" id="logbook-clear" class="vfo-mem-add" title="Delete every logged QSO">Clear</button>
+                </div>
             </div>
         </div>
 
@@ -448,11 +527,20 @@
                         <select id="theme-select" class="select-input"></select>
                     </div>
                     <div class="control-group">
-                        <button id="cw-filter-toggle" class="toggle-btn active" title="Toggle CW Adaptive IIR Noise Squelch & Sharpening. Off uses a Blackman-Harris window.">CW Filter: ON</button>
+                        <button id="cw-filter-toggle" class="toggle-btn active" title="Toggle CW Adaptive IIR Noise Squelch & Sharpening (flat-top window). Off uses the FFT Window chosen in Setting.">CW Filter: ON</button>
                     </div>
                 </div>
 
                 <div class="control-cluster control-right">
+                    <div class="control-group">
+                        <button id="audio-rec-btn" class="toggle-btn audio-rec-btn" title="Record the demodulated audio to a WAV file">REC</button>
+                        <button id="wf-snap-btn" class="toggle-btn icon-btn" title="Save a screenshot of the waterfall (PNG)" aria-label="Waterfall screenshot">
+                            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+                                <path d="M4 7.5h3.2l1.6-2.5h6.4l1.6 2.5H20a1 1 0 0 1 1 1V18a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8.5a1 1 0 0 1 1-1z"/>
+                                <circle cx="12" cy="13" r="3.6"/>
+                            </svg>
+                        </button>
+                    </div>
                     <div class="control-group">
                         <span class="group-label">AGC:</span>
                         <select id="agc-select" class="select-input" title="AGC Response Speed">
@@ -466,6 +554,31 @@
                         <input id="vol-slider" type="range" min="0" max="1" step="0.01" value="0.8">
                         <span id="vol-val" class="slider-val">80%</span>
                     </div>
+                </div>
+            </div>
+
+            <div id="macro-row" class="control-row control-row-macro">
+                <div class="macro-group macro-left">
+                    <input id="macro-caller" class="tx-text-input macro-caller" type="text" maxlength="14" placeholder="CALLER"
+                           spellcheck="false" autocomplete="off" autocapitalize="characters" aria-label="Caller callsign"
+                           title="The other station's callsign (&lt;CALLER&gt;)">
+                    <button type="button" id="macro-f1" class="toggle-btn macro-btn">F1 CQ</button>
+                    <button type="button" id="macro-f2" class="toggle-btn macro-btn">F2 ANS</button>
+                    <button type="button" id="macro-f3" class="toggle-btn macro-btn">F3 DE</button>
+                    <button type="button" id="macro-f4" class="toggle-btn macro-btn">F4 RST</button>
+                    <button type="button" id="macro-edit-btn" class="toggle-btn macro-log-btn macro-edit-btn" title="Edit the macros" aria-label="Edit the macros">&#x2699;&#xFE0E;</button>
+                </div>
+                <div class="macro-spacer"></div>
+                <div class="macro-group macro-right">
+                    <button type="button" id="contest-nr-down" class="toggle-btn macro-nr-btn" title="Contest serial −1" aria-label="Contest serial minus one">−</button>
+                    <span id="contest-nr" class="macro-nr" title="Contest serial (&lt;NR&gt;)">001</span>
+                    <button type="button" id="contest-nr-up" class="toggle-btn macro-nr-btn" title="Contest serial +1" aria-label="Contest serial plus one">+</button>
+                    <select id="macro-mode" class="select-input" title="Macro set" aria-label="Macro set">
+                        <option value="qso" selected>QSO</option>
+                        <option value="ans">QSO ANS</option>
+                        <option value="test">TEST</option>
+                    </select>
+                    <button type="button" id="logbook-btn" class="toggle-btn macro-log-btn" title="Logbook" aria-label="Logbook">📓</button>
                 </div>
             </div>
 
@@ -524,7 +637,8 @@
                         <div><kbd>Esc</kbd></div><div>Close this Help dialog</div>
                         <div><kbd>F8</kbd></div><div>CW dit paddle (PTT On, local sidetone)</div>
                         <div><kbd>F9</kbd></div><div>CW dah paddle (iambic squeeze with F8; PTT On)</div>
-                        <div><kbd>F4</kbd></div><div>CW straight key (PTT On, tone while held)</div>
+                        <div><kbd>F7</kbd></div><div>CW straight key (PTT On, tone while held)</div>
+                        <div><kbd>F1</kbd> &ndash; <kbd>F4</kbd></div><div>CW macros (set chosen in the macro bar; CALLER fills &lt;CALLER&gt;)</div>
                     </div>
                 </section>
 
@@ -541,7 +655,9 @@
                 <section class="help-section">
                     <h3>Local CW transmit</h3>
                     <p class="help-text">
-                        CW mode only, by typing text or using F8/F9/F4 as a Iambic paddle or straight key.
+                        CW mode only, by typing text or using F8/F9/F7 as a Iambic paddle or straight key.
+                        F1&ndash;F4 send the macro bar (callsign and contest exchange in CONFIG &rarr; OPERATOR);
+                        the report macros log the QSO in the logbook (&#128211;), exportable as ADIF.
                         Use <strong>PTT On</strong> to arms/stop the transmission.
                     </p>
                 </section>
@@ -579,6 +695,7 @@
     <script src="js/cw_decoder.js"></script>
     <script src="js/cw_recorder.js"></script>
     <script src="js/ws_reconnect.js"></script>
+    <script src="js/didah_proto.js"></script>
     <script src="js/connection.js"></script>
     <script src="js/sources.js"></script>
     <script src="js/kiwi.js"></script>
@@ -588,11 +705,14 @@
     <script src="js/ic7300.js"></script>
     <script src="js/rtlsdr.js"></script>
     <script src="js/cw_keyer.js"></script>
+    <script src="js/tx_iq.js"></script>
     <script src="js/spectrum_pipeline.js"></script>
     <script src="js/tuning.js"></script>
     <script src="js/source_manager.js"></script>
     <script src="js/ic7300_controller.js"></script>
     <script src="js/tx_controller.js"></script>
+    <script src="js/macros.js"></script>
+    <script src="js/logbook.js"></script>
     <script src="js/prefs_store.js"></script>
     <script src="js/ui_bindings.js"></script>
     <script src="js/app.js"></script>

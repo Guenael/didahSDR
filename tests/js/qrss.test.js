@@ -86,3 +86,25 @@ test('the QRSS view is about 200 Hz wide', () => {
     q.setInputRate(12000);
     assert.ok(Math.abs(q.outRate / q.viewZoom() - 200) < 1);
 });
+
+test('QRSS overlay helpers: tick spacing, durations, frequency and UTC formatting', () => {
+    const { qrssTickSeconds, formatQrssDuration, formatQrssFreq, formatQrssUtc, QRSS_SIZES } = require('../../app/js/qrss.js');
+    // Every WF Speed at 375 Hz and 344.5 Hz (44.1 kHz sources) lands ticks 80..150 px apart.
+    for (const rate of [375, 344.53125]) {
+        for (const n of QRSS_SIZES) {
+            const colSec = (n / 4) / rate;
+            const px = qrssTickSeconds(colSec) / colSec;
+            assert.ok(px >= 80 && px <= 150, `N=${n} rate=${rate}: ${px.toFixed(1)} px`);
+        }
+    }
+    assert.equal(qrssTickSeconds(0), 600);
+    assert.equal(formatQrssDuration(0.683), '0.68 s');
+    assert.equal(formatQrssDuration(5.46), '5.5 s');
+    assert.equal(formatQrssDuration(30), '30 s');
+    assert.equal(formatQrssDuration(60), '1 min');
+    assert.equal(formatQrssDuration(90), '1 min 30 s');
+    assert.equal(formatQrssFreq(14047900), '14 047.900 kHz');
+    assert.equal(formatQrssFreq(10139987.4), '10 139.987 kHz');
+    assert.equal(formatQrssFreq(-1250), '-1.250 kHz');
+    assert.equal(formatQrssUtc(Date.UTC(2026, 8, 26, 18, 13, 14, 500)), '2026-09-26 18:13:14Z');
+});

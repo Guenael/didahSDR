@@ -26,8 +26,10 @@ function makeCtx(overrides = {}) {
         clientFft: new DidahFFT(state.fftSize),
         cwFilter: new CWAdaptiveFilter(state.fftSize),
         waterfall: {
-            addSlice: () => n.slices++, clear: () => n.clears++, setCenterFreq() {}, setTunedFreq() {},
-            zoom: 2.67, panOffset: 0
+            addSlice: () => n.slices++, clear: () => n.clears++, setTunedFreq() {},
+            setCenterFreq(cf) { this.centerFreq = cf; },
+            setQrssOverlay(info) { this.qrssInfo = info; },
+            zoom: 2.67, panOffset: 0, centerFreq: 0, qrssInfo: null
         },
         smeter: { updateFromSpectrum: () => n.meter++, reset() {} },
         audioPlayer: { pushFloatAudio: (a) => { n.audio += a.length; }, resetBuffer: () => n.audioResets++ },
@@ -112,4 +114,21 @@ test('QRSS replaces the wideband columns with its own narrow ones, and restores 
     pipeline.setQrssEnabled(false);
     assert.equal(ctx.demodulator.qrssPush, null);
     assert.deepEqual([ctx.waterfall.zoom, ctx.waterfall.panOffset], [4, 123]);
+});
+
+test('QRSS drives the waterfall overlay and centres SSB on the passband, not the dial', () => {
+    const { ctx, pipeline } = makeCtx();
+    ctx.state.modulation = 'usb';
+    pipeline.setQrssEnabled(true);
+    const info = ctx.waterfall.qrssInfo;
+    assert.ok(info && info.colSec > 0, 'overlay on');
+    assert.ok(Math.abs(info.colSec - ctx.qrss.hop / ctx.qrss.outRate) < 1e-12);
+    assert.ok(Math.abs(info.windowSec - ctx.qrss.fftSize / ctx.qrss.outRate) < 1e-12);
+    const m = MODES.usb;
+    assert.equal(ctx.waterfall.centerFreq, ctx.state.tunedFreq + (m.low + m.high) / 2);
+    pipeline.setQrssEnabled(false);
+    assert.equal(ctx.waterfall.qrssInfo, null);
+    ctx.state.modulation = 'cw';
+    pipeline.setQrssEnabled(true);
+    assert.equal(ctx.waterfall.centerFreq, ctx.state.tunedFreq);
 });

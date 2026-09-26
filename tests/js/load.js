@@ -18,13 +18,15 @@ const { MODES, WATERFALL_DB_FLOOR, setSsbPassband } = req('modes.js');
 global.MODES = MODES;
 global.WATERFALL_DB_FLOOR = WATERFALL_DB_FLOOR;
 global.setSsbPassband = setSsbPassband;
+Object.assign(global, req('didah_proto.js'));
 global.CW_BW_MIN = req('modes.js').CW_BW_MIN;
 global.CW_BW_MAX = req('modes.js').CW_BW_MAX;
 global.Colormaps = req('colormaps.js');
 global.CWAdaptiveFilter = req('cw_filter.js');
 global.DidahFFT = req('fft.js');
 global.DidahSMeter = req('smeter.js');
-global.AGC = req('agc.js');
+global.AGC = req('agc.js').AGC;
+global.ChannelNoiseEstimator = req('agc.js').ChannelNoiseEstimator;
 const fx = req('audio_fx.js');
 global.DidahAutoNotch = fx.DidahAutoNotch;
 global.DidahNoiseReduction = fx.DidahNoiseReduction;
@@ -97,6 +99,13 @@ function audioPeak(samples, rate, fftSize = 8192) {
     return { freq: ((pi - fftSize / 2) * rate) / fftSize, db: pk, spec };
 }
 
+/** Seeded N(0, 1) source (LCG + Box-Muller): reproducible noise for level/threshold tests. */
+function gaussSource(seed = 1) {
+    let st = seed >>> 0;
+    const u = () => { st = (Math.imul(st, 1664525) + 1013904223) >>> 0; return (st + 0.5) / 4294967296; };
+    return () => Math.sqrt(-2 * Math.log(u())) * Math.cos(2 * Math.PI * u());
+}
+
 const peakAbs = (a) => { let p = 0; for (let i = 0; i < a.length; i++) { const v = Math.abs(a[i]); if (v > p) p = v; } return p; };
 
-module.exports = { req, loadSampleWav, iqTone, floatIq, audioPeak, peakAbs, SAMPLE_WAV };
+module.exports = { req, loadSampleWav, iqTone, floatIq, audioPeak, peakAbs, gaussSource, SAMPLE_WAV };

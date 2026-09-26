@@ -47,7 +47,7 @@ test('every source keeps the callbacks it is given (a dropped one fails silently
     const { RtlSdrSource } = req('rtlsdr.js');
     const cb = () => {};
     const cases = [
-        [DidahConnection, ['onRawIQ', 'onConfig', 'onStatusChange'], { url: 'ws://x/ws' }],
+        [DidahConnection, ['onRawIQ', 'onReady', 'onStatusChange', 'onCenterApplied', 'onTelemetry'], { url: 'ws://x/ws' }],
         [KiwiConnection, ['onRawIQ', 'onReady', 'onStatusChange', 'onCenterApplied'], {}],
         [SoundcardSource, ['onRawIQ', 'onReady', 'onStatusChange', 'onDevices'], {}],
         [Ic7300Source, ['onRawIQ', 'onReady', 'onStatusChange', 'onDevices', 'onFrequency', 'onMode'], {}],

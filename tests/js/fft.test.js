@@ -53,3 +53,27 @@ test('blackman window is coherent-gain normalised; mag2Buffer matches dB', () =>
     assert.ok(Math.abs(pk) < 0.5, `blackman peak ${pk} dB`);
     assert.ok(Math.abs(10 * Math.log10(fft.mag2Buffer[pi]) - pk) < 1e-6);
 });
+
+test('every FFT window has the textbook ENBW and reads a bin-centred full-scale tone at 0 dBFS', () => {
+    const enbw = { rect: 1.0, hann: 1.5, hamming: 1.363, blackman: 1.727, bh4: 2.004, flattop: 3.77 };
+    const n = 2048;
+    const re = new Float32Array(n), im = new Float32Array(n);
+    const k = 200;   // bin-centred complex tone
+    for (let i = 0; i < n; i++) {
+        re[i] = Math.cos((2 * Math.PI * k * i) / n);
+        im[i] = Math.sin((2 * Math.PI * k * i) / n);
+    }
+    for (const name of DidahFFT.WINDOWS) {
+        const fft = new DidahFFT(n);
+        fft.initWindow(name);
+        assert.equal(fft.windowName, name);
+        assert.ok(Math.abs(fft.enbw - enbw[name]) < 0.02, `${name} ENBW ${fft.enbw}`);
+        const spec = fft.computeSpectrumDb(re, im);
+        let pk = -Infinity;
+        for (let i = 0; i < n; i++) if (spec[i] > pk) pk = spec[i];
+        assert.ok(Math.abs(pk) < 0.05, `${name} peak ${pk} dB`);
+    }
+    const fallback = new DidahFFT(256);
+    fallback.initWindow('nope');
+    assert.equal(fallback.windowName, 'bh4');
+});

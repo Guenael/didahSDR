@@ -14,6 +14,8 @@
  * - Continuous left-click drag on waterfall for real-time tracking.
  * - requestAnimationFrame render loop that only draws when a slice arrived or the view changed
  *   (dirty flag), so an idle or powered-off receiver costs no GPU time. FPS counts real draws.
+ * - QRSS: white elapsed-time ticks along the bottom edge (drawn in the fragment shader, so they
+ *   scroll with the data) and a bottom-left caption card (title, UTC, bottom-edge frequency, tick).
  */
 
 /** Passband LUT id: the stored reverse of the selected theme, or the forward table when the theme id is already reversed. */
@@ -90,6 +92,16 @@ class HorizontalWaterfall {
         this.aPos = -1;
         this.contextLost = false;
 
+        // QRSS overlay: elapsed-time ticks (shader) + caption card (DOM). Off outside QRSS.
+        this.qrssOn = false;
+        this.qrssColSec = 0;      // seconds per column (hop / decimated rate)
+        this.qrssWindowSec = 0;   // FFT window length, seconds
+        this.qrssTickSec = 60;
+        this.qrssTimer = null;
+        this.qrssBox = null;
+        this.qrssFields = null;
+        this.qrssText = { time: '', freq: '', tick: '' };
+
         // FPS & timing
         this.running = true;
         this.lastRenderTime = 0;
@@ -131,6 +143,38 @@ class HorizontalWaterfall {
 
         this.container.appendChild(this.wfCanvas);
         this.container.appendChild(this.rulerCanvas);
+        this.initQrssBox();
+    }
+
+    /** QRSS caption card, bottom-left over the waterfall. Pre-built spans; updates use textContent. */
+    initQrssBox() {
+        const el = (tag, cls, text) => {
+            const e = document.createElement(tag);
+            if (cls) e.className = cls;
+            if (text) e.textContent = text;
+            return e;
+        };
+        const box = el('div', 'wf-qrss-card');
+        box.setAttribute('aria-hidden', 'true');
+        box.style.display = 'none';
+        const head = el('div', 'wf-qrss-head');
+        const title = el('span', 'wf-qrss-title', 'didah');
+        title.appendChild(el('b', null, 'SDR'));
+        head.appendChild(title);
+        head.appendChild(el('span', 'wf-qrss-badge', 'QRSS'));
+        box.appendChild(head);
+        box.appendChild(el('div', 'wf-qrss-rule'));
+        const row = (key) => {
+            const r = el('div', 'wf-qrss-row');
+            r.appendChild(el('span', 'wf-qrss-key', key));
+            const v = el('span', 'wf-qrss-val');
+            r.appendChild(v);
+            box.appendChild(r);
+            return v;
+        };
+        this.qrssFields = { time: row('UTC'), freq: row('Base'), tick: row('Tick') };
+        this.qrssBox = box;
+        this.container.appendChild(box);
     }
 
     initRenderer() {
@@ -193,17 +237,31 @@ class HorizontalWaterfall {
             uniform float u_dbFloor;
             uniform float u_dynRange;
 
+            uniform float u_qrssTicks;   // 1 in QRSS: white elapsed-time ticks along the bottom edge
+            uniform float u_tickCols;    // tick spacing in columns (tick seconds / column seconds)
+            uniform float u_rowBase;     // absolute column of ring row 0, modulo u_tickCols
+            uniform float u_tickPx;      // tick length, canvas pixels from the bottom edge
+
+            /** One column is one canvas pixel: a 1.5 px wide white line, pixel-coverage antialiased. */
+            vec4 qrssTick(vec4 color, float row) {
+                if (u_qrssTicks < 0.5 || gl_FragCoord.y > u_tickPx) return color;
+                float c = row + u_rowBase;
+                float b = floor(c / u_tickCols + 0.5) * u_tickCols;
+                float cover = clamp(min(c + 0.5, b + 0.75) - max(c - 0.5, b - 0.75), 0.0, 1.0);
+                return mix(color, vec4(1.0), cover);
+            }
+
             void main() {
+                float row = (u_scrollPos - 0.5) - (1.0 - v_uv.x) * u_visibleCols;
                 // Frequency is the texture row (X). Time is the texture column ring (Y).
                 float texX = mix(u_freqBottom, u_freqTop, v_uv.y);
                 if (texX < -0.002 || texX > 1.002) {
-                    gl_FragColor = vec4(0.04, 0.04, 0.06, 1.0);
+                    gl_FragColor = qrssTick(vec4(0.04, 0.04, 0.06, 1.0), row);
                     return;
                 }
                 // Sample the centre of the bin. Without the half-bin the carrier sits one bin high.
                 float dataX = texX + 0.5 / max(1.0, u_freqLen);
 
-                float row = (u_scrollPos - 0.5) - (1.0 - v_uv.x) * u_visibleCols;
                 float texY = fract(fract(row / u_timeRows) + 1.0);
                 float texYc = clamp(texY, 0.0005, 0.9995);
 
@@ -228,7 +286,7 @@ class HorizontalWaterfall {
                 vec4 colPassband = texture2D(u_colormap, vec2(norm, 0.75));
                 float inPass = smoothstep(u_pbMin - u_edgeX, u_pbMin, texX)
                     * (1.0 - smoothstep(u_pbMax, u_pbMax + u_edgeX, texX));
-                gl_FragColor = mix(colNormal, colPassband, inPass);
+                gl_FragColor = qrssTick(mix(colNormal, colPassband, inPass), row);
             }
         `;
 
@@ -261,7 +319,11 @@ class HorizontalWaterfall {
             u_viewH: gl.getUniformLocation(this.program, 'u_viewH'),
             u_minLevel: gl.getUniformLocation(this.program, 'u_minLevel'),
             u_dbFloor: gl.getUniformLocation(this.program, 'u_dbFloor'),
-            u_dynRange: gl.getUniformLocation(this.program, 'u_dynRange')
+            u_dynRange: gl.getUniformLocation(this.program, 'u_dynRange'),
+            u_qrssTicks: gl.getUniformLocation(this.program, 'u_qrssTicks'),
+            u_tickCols: gl.getUniformLocation(this.program, 'u_tickCols'),
+            u_rowBase: gl.getUniformLocation(this.program, 'u_rowBase'),
+            u_tickPx: gl.getUniformLocation(this.program, 'u_tickPx')
         };
 
         // Full-screen quad
@@ -435,6 +497,15 @@ class HorizontalWaterfall {
         gl.uniform1f(this.uniforms.u_dbFloor, WATERFALL_DB_FLOOR);
         gl.uniform1f(this.uniforms.u_dynRange, Math.max(1.0, this.dynamicRange));
 
+        // Ticks are anchored to the absolute column count, not the ring row: the shader adds the
+        // column index of ring row 0 (kept modulo the tick spacing so it stays small in float32).
+        const ticks = this.qrssOn && this.qrssColSec > 0;
+        const tickCols = ticks ? this.qrssTickSec / this.qrssColSec : 1;
+        gl.uniform1f(this.uniforms.u_qrssTicks, ticks ? 1 : 0);
+        gl.uniform1f(this.uniforms.u_tickCols, tickCols);
+        gl.uniform1f(this.uniforms.u_rowBase, ticks ? (this.scrollPos - scrollPos) % tickCols : 0);
+        gl.uniform1f(this.uniforms.u_tickPx, 11);   // same length as the ruler's major ticks
+
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 
@@ -465,7 +536,68 @@ class HorizontalWaterfall {
     /** Redraw the ruler and mark the WebGL view dirty after any view / tuning change. */
     refreshChrome() {
         this.drawRuler();
+        if (this.qrssOn) this.updateQrssBox();
         this.dirty = true;
+    }
+
+    /**
+     * QRSS overlay on/off. `info` = { colSec, windowSec } (seconds per column, FFT window length)
+     * turns on or updates the ticks and the caption card; null turns both off. The 1 s clock
+     * timer exists only while QRSS is on.
+     */
+    setQrssOverlay(info) {
+        const on = !!(info && info.colSec > 0);
+        if (on) {
+            this.qrssColSec = info.colSec;
+            this.qrssWindowSec = info.windowSec || 0;
+            this.qrssTickSec = qrssTickSeconds(this.qrssColSec);
+            if (!this.qrssTimer) this.qrssTimer = setInterval(() => this.updateQrssBox(), 1000);
+        } else if (this.qrssTimer) {
+            clearInterval(this.qrssTimer);
+            this.qrssTimer = null;
+        }
+        this.qrssOn = on;
+        if (this.qrssBox) this.qrssBox.style.display = on ? '' : 'none';
+        this.refreshChrome();
+    }
+
+    /**
+     * Screenshot: a 2D canvas of the waterfall, the ruler and (in QRSS) the caption card, as on screen.
+     * preserveDrawingBuffer stays off (it costs a copy per frame): render and copy in the same task,
+     * before the browser presents and clears the WebGL buffer.
+     */
+    snapshot() {
+        const w = this.wfCanvas.width;
+        const h = this.wfCanvas.height;
+        const out = document.createElement('canvas');
+        out.width = w + this.rulerWidth;
+        out.height = h;
+        const g = out.getContext('2d');
+        g.fillStyle = '#121418';
+        g.fillRect(0, 0, out.width, h);
+        this.renderWebGL();
+        g.drawImage(this.wfCanvas, 0, 0);
+        this.drawRuler();
+        g.drawImage(this.rulerCanvas, w, 0);
+        g.fillStyle = '#232832';
+        g.fillRect(w, 0, 1, h);
+        if (this.qrssOn && this.qrssBox) {
+            this.updateQrssBox();
+            paintQrssCard(g, this.qrssBox, this.container.getBoundingClientRect());
+        }
+        return out;
+    }
+
+    updateQrssBox() {
+        const f = this.qrssFields;
+        if (!f || !this.qrssOn) return;
+        const last = this.qrssText;
+        const time = formatQrssUtc(Date.now());
+        const freq = formatQrssFreq(this.getVisibleFreqRange().start);
+        const tick = `${formatQrssDuration(this.qrssTickSec)} \u00b7 Win ${formatQrssDuration(this.qrssWindowSec)}`;
+        if (time !== last.time) f.time.textContent = last.time = time;
+        if (freq !== last.freq) f.freq.textContent = last.freq = freq;
+        if (tick !== last.tick) f.tick.textContent = last.tick = tick;
     }
 
     setPrimaryTheme(theme) {
@@ -874,6 +1006,58 @@ class HorizontalWaterfall {
     clear() {
         this.resizeDataTexture();
     }
+}
+
+/** Canvas copy of the QRSS caption card (.wf-qrss-card): its box, then each text element at its layout position. */
+function paintQrssCard(g, box, origin) {
+    const r = box.getBoundingClientRect();
+    const x = r.left - origin.left;
+    const y = r.top - origin.top;
+    g.save();
+    g.shadowColor = 'rgba(0, 0, 0, 0.45)';
+    g.shadowBlur = 18;
+    g.shadowOffsetY = 6;
+    const bg = g.createLinearGradient(0, y, 0, y + r.height);
+    bg.addColorStop(0, 'rgba(246, 247, 249, 0.93)');
+    bg.addColorStop(1, 'rgba(222, 226, 232, 0.93)');
+    g.fillStyle = bg;
+    g.beginPath();
+    if (g.roundRect) g.roundRect(x, y, r.width, r.height, 5);
+    else g.rect(x, y, r.width, r.height);
+    g.fill();
+    g.restore();
+    const cs = getComputedStyle(box);
+    g.fillStyle = cs.borderLeftColor;
+    g.fillRect(x, y + 1, 3, r.height - 2);
+    for (const el of box.querySelectorAll('.wf-qrss-rule, .wf-qrss-badge')) {
+        const e = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        if (el.classList.contains('wf-qrss-rule')) {
+            const rule = g.createLinearGradient(e.left - origin.left, 0, e.right - origin.left, 0);
+            rule.addColorStop(0, cs.borderLeftColor);
+            rule.addColorStop(0.85, 'rgba(97, 175, 239, 0)');
+            g.fillStyle = rule;
+        } else {
+            g.fillStyle = style.backgroundColor;
+        }
+        g.fillRect(e.left - origin.left, e.top - origin.top, e.width, e.height);
+    }
+    // Text: every text node, in its element's font and colour, on its own line box.
+    const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    g.textBaseline = 'middle';
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.textContent.trim()) continue;
+        range.selectNodeContents(node);
+        const t = range.getBoundingClientRect();
+        const style = getComputedStyle(node.parentElement);
+        g.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+        g.fillStyle = style.color;
+        let text = node.textContent;
+        if (style.textTransform === 'uppercase') text = text.toUpperCase();
+        g.fillText(text, t.left - origin.left, t.top - origin.top + t.height / 2);
+    }
+    range.detach();
 }
 
 if (typeof module !== 'undefined') module.exports = HorizontalWaterfall;

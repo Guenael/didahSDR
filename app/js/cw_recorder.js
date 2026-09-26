@@ -8,6 +8,8 @@
  *   <name>.json       sidecar (tuning, rates, gains, live model decode as a draft transcript).
  * Each WAV is peak-normalised to -1 dBFS; the gain is in the sidecar. The model features are
  * ln|X| minus a median floor, so the scale does not change what the model sees.
+ *
+ * AudioRecorder is the bottom-bar REC: the demodulated audio only, one mono WAV, no sidecar.
  */
 
 const REC_MAX_S = 600;
@@ -25,11 +27,8 @@ function peakGain(chunks) {
     return peak > 0 ? REC_PEAK / peak : 1;
 }
 
-/** PCM int16 WAV from interleaved float chunks. Values are scaled by `gain` and clipped. */
-function encodeWavInt16(chunks, channels, rate, gain = 1) {
-    let n = 0;
-    for (const c of chunks) n += c.length;
-    const buf = new ArrayBuffer(44 + n * 2);
+/** 44-byte PCM int16 WAV header for `n` samples (all channels) into `buf`. */
+function writeWavHeader(buf, n, channels, rate) {
     const v = new DataView(buf);
     const str = (o, s) => { for (let k = 0; k < s.length; k++) v.setUint8(o + k, s.charCodeAt(k)); };
     str(0, 'RIFF');
@@ -45,6 +44,14 @@ function encodeWavInt16(chunks, channels, rate, gain = 1) {
     v.setUint16(34, 16, true);
     str(36, 'data');
     v.setUint32(40, n * 2, true);
+    return buf;
+}
+
+/** PCM int16 WAV from interleaved float chunks. Values are scaled by `gain` and clipped. */
+function encodeWavInt16(chunks, channels, rate, gain = 1) {
+    let n = 0;
+    for (const c of chunks) n += c.length;
+    const buf = writeWavHeader(new ArrayBuffer(44 + n * 2), n, channels, rate);
     const out = new Int16Array(buf, 44, n);
     let p = 0;
     for (const c of chunks) {
@@ -194,25 +201,107 @@ class CWRecorder {
     }
 }
 
+/** Browser download of one Blob. */
+function downloadBlob(fname, blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
 /** Browser download of the three files of a clip. */
 function saveRecording(clip) {
-    const files = [
-        [`${clip.name}.wav`, new Blob([clip.iqWav], { type: 'audio/wav' })],
-        [`${clip.name}.audio.wav`, new Blob([clip.audioWav], { type: 'audio/wav' })],
-        [`${clip.name}.json`, new Blob([JSON.stringify(clip.sidecar, null, 2) + '\n'], { type: 'application/json' })],
-    ];
-    for (const [fname, blob] of files) {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fname;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 10000);
+    downloadBlob(`${clip.name}.wav`, new Blob([clip.iqWav], { type: 'audio/wav' }));
+    downloadBlob(`${clip.name}.audio.wav`, new Blob([clip.audioWav], { type: 'audio/wav' }));
+    downloadBlob(`${clip.name}.json`, new Blob([JSON.stringify(clip.sidecar, null, 2) + '\n'], { type: 'application/json' }));
+}
+
+const AUDIO_REC_MAX_S = 3600;
+
+/** didahSDR_20120219_181314Z_21048000_AUDIO (UTC start, dial Hz). */
+/** didahSDR_YYYYMMDD_HHMMSSZ_<Hz>_<KIND>: the bottom-bar REC (AUDIO) and the waterfall screenshots (WF / QRSS). */
+function didahFileName(date, dialHz, kind) {
+    const z = (x) => String(x).padStart(2, '0');
+    const d = `${date.getUTCFullYear()}${z(date.getUTCMonth() + 1)}${z(date.getUTCDate())}`;
+    const t = `${z(date.getUTCHours())}${z(date.getUTCMinutes())}${z(date.getUTCSeconds())}`;
+    return `didahSDR_${d}_${t}Z_${Math.round(dialHz)}_${kind}`;
+}
+
+function audioRecName(date, dialHz) {
+    return didahFileName(date, dialHz, 'AUDIO');
+}
+
+/**
+ * Bottom-bar REC: demodulated audio (post-AGC/squelch, pre-volume) as mono int16 at the channel rate.
+ * Samples go straight into 1 s int16 blocks (the AGC output already sits under full scale, so there is
+ * no normalisation pass). A rate change (retune to another plan) ends the file, since a WAV has one rate.
+ */
+class AudioRecorder {
+    constructor(maxSeconds = AUDIO_REC_MAX_S) {
+        this.maxSeconds = maxSeconds;
+        this.recording = false;
+        this.onStop = null;
+        this.rate = 0;
+        this.name = '';
+        this.blocks = [];
+        this.fill = 0;
+        this.samples = 0;
+    }
+
+    get seconds() { return this.rate > 0 ? this.samples / this.rate : 0; }
+
+    start({ rate, dialHz, date = new Date() }) {
+        this.rate = Math.round(rate);
+        this.name = audioRecName(date, dialHz);
+        this.blocks = [new Int16Array(this.rate)];
+        this.fill = 0;
+        this.samples = 0;
+        this.recording = true;
+    }
+
+    pushAudio(buf, rate) {
+        if (!this.recording) return;
+        if (Math.round(rate) !== this.rate) { this.stop('rate'); return; }
+        const n = buf.length;
+        let block = this.blocks[this.blocks.length - 1];
+        for (let k = 0; k < n; k++) {
+            if (this.fill === block.length) {
+                block = new Int16Array(this.rate);
+                this.blocks.push(block);
+                this.fill = 0;
+            }
+            const s = Math.round(buf[k] * 32768);
+            block[this.fill++] = s > 32767 ? 32767 : (s < -32768 ? -32768 : s);
+        }
+        this.samples += n;
+        if (this.samples >= this.maxSeconds * this.rate) this.stop('limit');
+    }
+
+    /** Ends the file; returns (and hands onStop) { name, blob, seconds, reason }, or null if idle. */
+    stop(reason = 'user') {
+        if (!this.recording) return null;
+        this.recording = false;
+        const parts = [writeWavHeader(new ArrayBuffer(44), this.samples, 1, this.rate)];
+        const last = this.blocks.length - 1;
+        this.blocks.forEach((b, i) => parts.push(i === last ? b.subarray(0, this.fill) : b));
+        const clip = {
+            name: this.name, seconds: this.seconds, reason,
+            blob: new Blob(parts, { type: 'audio/wav' }),
+        };
+        this.blocks = [];
+        this.fill = 0;
+        if (this.onStop) this.onStop(clip);
+        return clip;
     }
 }
 
 if (typeof module !== 'undefined') {
-    module.exports = { CWRecorder, encodeWavInt16, peakGain, recName, saveRecording, REC_MAX_S, REC_DRAIN_MS };
+    module.exports = {
+        CWRecorder, AudioRecorder, encodeWavInt16, writeWavHeader, peakGain, recName, audioRecName, didahFileName,
+        saveRecording, downloadBlob, REC_MAX_S, REC_DRAIN_MS, AUDIO_REC_MAX_S
+    };
 }

@@ -3,8 +3,9 @@
  *
  * Per sample:
  *   1. Envelope: instant attack, exponential release (release time = AGC speed).
- *   2. Noise floor: sliding minimum (~2 s) of a fast 20 ms-release envelope. Between Morse elements
- *      that envelope *is* the noise, so this is the noise level on which our knee is based.
+ *   2. Noise floor: supplied from outside (setNoiseRms, once per block) by ChannelNoiseEstimator below,
+ *      which reads the noise off the spectrum *outside* the channel passband (Rocky-style). A steady
+ *      carrier or dense CW therefore cannot lift it. noiseFloor = NOISE_FLOOR_K * audio noise rms.
  *   3. Knee: Out = MaxOut * (1 - exp(-In / Beta)), Beta = noiseKnee * noiseFloor.
  *      Weak signals just above the noise get more gain than strong ones (the "two-sided" part),
  *      while the noise itself sits at a fixed, modest output level.
@@ -16,6 +17,14 @@
  *
  * Processes in place. No allocations after construction.
  */
+
+/**
+ * noiseFloor / audio noise rms. The previous in-band estimator (min of 100 ms means of a 20 ms-release
+ * envelope, peak-hold biased) read ~1.34x the rms in pure noise through the 150 Hz CW channel; 1.38 puts
+ * the 150 Hz noise output within 0.1 dB of it. That estimator read 1.6x at 500 Hz and 2.1x in USB,
+ * so wide filters now play the noise ~1 dB (500 Hz) and ~3 dB (USB) louder than before.
+ */
+const NOISE_FLOOR_K = 1.38;
 
 class AGC {
     constructor(sampleRate = 48000) {
@@ -51,25 +60,9 @@ class AGC {
         this.delayBuf = new Float32Array(this.delayLen);
         this.delayIdx = 0;
 
-        // Noise floor = minimum over ~2 s of 100 ms block *means* of a fast envelope (20 ms release).
-        // Inter-character gaps (>= 3 dits) always contain a noise-only block, so the minimum is the
-        // noise even during a transmission. Means, not minima: the envelope of narrowband noise is
-        // Rayleigh, and a raw minimum over 2 s lands ~20 dB under the rms. The old estimator used the
-        // slow AGC envelope, which never reaches the noise inside a character, so the floor drifted with
-        // the signal and the volume swelled and faded over seconds.
-        // The floor drops to a new minimum immediately and rises toward it with a 200 ms time constant.
-        this.fastDecay = Math.exp(-1.0 / (sampleRate * 0.02));
-        this.floorBlockTicks = Math.floor(subRate * 0.1);
-        this.floorBlocks = new Float32Array(20).fill(1.0);
-        this.floorBlockIdx = 0;
-        this.floorBlockTick = 0;
-        this.floorBlockSum = 0.0;
-        this.floorUp = 1.0 / (subRate * 0.2);
-
         this.env = 0.0;
-        this.fastEnv = 0.0;
         this.blockPeak = 0.0;     // max |s| since the last gain update
-        this.noiseFloor = 1e-3;
+        this.noiseFloor = 1e-3;   // amplitude, NOISE_FLOOR_K * noise rms once setNoiseRms() has run
         this.gPrev = 1.0;
         this.gNext = 1.0;
         this.phase = 0;           // position within the current `dec` interval, persists across calls
@@ -84,17 +77,18 @@ class AGC {
         this.delayBuf.fill(0.0);
         this.bufIdx = 0;
         this.delayIdx = 0;
-        this.floorBlocks.fill(1.0);
-        this.floorBlockIdx = 0;
-        this.floorBlockTick = 0;
-        this.floorBlockSum = 0.0;
         this.env = 0.0;
-        this.fastEnv = 0.0;
         this.blockPeak = 0.0;
         this.noiseFloor = 1e-3;
         this.gPrev = 1.0;
         this.gNext = 1.0;
         this.phase = 0;
+    }
+
+    /** Noise rms of the (pre-AGC) audio, from ChannelNoiseEstimator. Call before process(). */
+    setNoiseRms(rms) {
+        const f = NOISE_FLOOR_K * rms;
+        this.noiseFloor = f > 1e-7 ? f : 1e-7;
     }
 
     /** 'fast' | 'medium' | 'slow' : envelope release time 40 / 100 / 300 ms */
@@ -121,18 +115,10 @@ class AGC {
         const maxGain = this.maxGain;
         const knee = this.noiseKnee;
         const decay = this.decay;
-        const fastDecay = this.fastDecay;
-        const floorUp = this.floorUp;
-        const floorBlocks = this.floorBlocks;
-        const floorBlockTicks = this.floorBlockTicks;
+        const beta = knee * this.noiseFloor;
 
         let env = this.env;
-        let fastEnv = this.fastEnv;
-        let floorBlockSum = this.floorBlockSum;
-        let floorBlockIdx = this.floorBlockIdx;
-        let floorBlockTick = this.floorBlockTick;
         let blockPeak = this.blockPeak;
-        let floor = this.noiseFloor;
         let bufIdx = this.bufIdx;
         let gPrev = this.gPrev;
         let gNext = this.gNext;
@@ -143,27 +129,14 @@ class AGC {
             const s = samples[i];
             const absS = s < 0 ? -s : s;
             env = absS > env ? absS : env * decay;
-            fastEnv = absS > fastEnv ? absS : fastEnv * fastDecay;
             if (absS > blockPeak) blockPeak = absS;
 
             if (phase === 0) {
-                floorBlockSum += fastEnv;
-                if (++floorBlockTick >= floorBlockTicks) {
-                    floorBlockTick = 0;
-                    floorBlocks[floorBlockIdx] = floorBlockSum / floorBlockTicks;
-                    floorBlockIdx = floorBlockIdx === floorBlocks.length - 1 ? 0 : floorBlockIdx + 1;
-                    floorBlockSum = 0.0;
-                }
-                let minHold = floorBlocks[0];
-                for (let k = 1; k < floorBlocks.length; k++) if (floorBlocks[k] < minHold) minHold = floorBlocks[k];
-                floor = minHold < floor ? minHold : floor + (minHold - floor) * floorUp;
-                if (floor < 1e-7) floor = 1e-7;
-
                 // Block peak (not the decayed envelope) so the gain covers every sample in the block
                 let inMag = env > blockPeak ? env : blockPeak;
                 if (inMag < 1e-6) inMag = 1e-6;
                 blockPeak = 0.0;
-                const gInst = Math.min(maxGain, (maxOut * (1.0 - Math.exp(-inMag / (knee * floor)))) / inMag);
+                const gInst = Math.min(maxGain, (maxOut * (1.0 - Math.exp(-inMag / beta))) / inMag);
 
                 minBuf[bufIdx] = gInst;
                 let gMin = minBuf[0];
@@ -194,12 +167,7 @@ class AGC {
         }
 
         this.env = env;
-        this.fastEnv = fastEnv;
-        this.floorBlockSum = floorBlockSum;
-        this.floorBlockIdx = floorBlockIdx;
-        this.floorBlockTick = floorBlockTick;
         this.blockPeak = blockPeak;
-        this.noiseFloor = floor;
         this.bufIdx = bufIdx;
         this.gPrev = gPrev;
         this.gNext = gNext;
@@ -209,4 +177,189 @@ class AGC {
     }
 }
 
-if (typeof module !== 'undefined') module.exports = AGC;
+/**
+ * Channel noise from the spectrum around the channel (Rocky-style: "estimates the input noise r.m.s. from
+ * the spectrum of the unfiltered signal"). Fed the complex baseband *before* the channel FIR, at the channel
+ * rate, where the passband is centred on 0 Hz with half-width = the channel cutoff.
+ *
+ * Every FRAME samples (no overlap): Hann window, complex FFT, |X|², then the median of the bins that are
+ *   - outside the passband + guard (cutoff + transition + Hann main lobe), and
+ *   - inside min(0.4 fs, 4 kHz): the outer bins hold the source roll-off (Kiwi, IC-7300) and, above 4 kHz,
+ *     the aliased transition of the last halfband.
+ * A signal in the passband never reaches these bins, and the median ignores the few occupied ones.
+ * Median of an exponential = ln2 · mean, so the complex noise variance per sample is
+ *   σ² = median / (ln2 · Σw²)
+ * and the noise power in the real demodulated audio (channel FIR of unity passband gain, then Re()) is
+ *   noisePower = σ² · Σh² / 2.
+ * σ² is smoothed in the log domain (~0.5 s); the first estimates after reset() are a running mean, so
+ * the value is usable after one frame (~21 ms at 12 kHz). No allocations after setSampleRate/setChannel.
+ */
+class ChannelNoiseEstimator {
+    constructor(sampleRate = 12000, frame = 256) {
+        this.N = frame;
+        const N = frame;
+        let bits = 0;
+        while ((1 << bits) < N) bits++;
+        this.bitrev = new Uint16Array(N);
+        for (let i = 0; i < N; i++) {
+            let r = 0;
+            for (let b = 0; b < bits; b++) if (i & (1 << b)) r |= 1 << (bits - 1 - b);
+            this.bitrev[i] = r;
+        }
+        this.cosT = new Float32Array(N >> 1);
+        this.sinT = new Float32Array(N >> 1);
+        for (let k = 0; k < N >> 1; k++) {
+            this.cosT[k] = Math.cos((2 * Math.PI * k) / N);
+            this.sinT[k] = Math.sin((2 * Math.PI * k) / N);
+        }
+        this.win = new Float32Array(N);
+        let sw2 = 0.0;
+        for (let n = 0; n < N; n++) {
+            const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * n) / N);
+            this.win[n] = w;
+            sw2 += w * w;
+        }
+        this.medianScale = 1.0 / (Math.LN2 * sw2);   // median |X|² -> σ²
+        this.bufI = new Float32Array(N);
+        this.bufQ = new Float32Array(N);
+        this.re = new Float32Array(N);
+        this.im = new Float32Array(N);
+        this.sel = new Float32Array(N);
+        this.useBin = new Uint8Array(N);
+        this.nUsed = 0;
+        this.fill = 0;
+        this.cutoff = 0.0;
+        this.guard = 0.0;
+        this.sumH2 = 1.0;
+        this.logSigma2 = 0.0;
+        this.frames = 0;
+        this.valid = false;
+        this.setSampleRate(sampleRate);
+    }
+
+    setSampleRate(rate) {
+        this.sampleRate = rate;
+        this.alphaMin = 1.0 - Math.exp(-this.N / (rate * 0.5));
+        this._buildMask();
+        this.reset();
+    }
+
+    /**
+     * @param {number} cutoffHz - channel half-width (passband is ±cutoff around 0 Hz)
+     * @param {number} guardHz  - extra exclusion past the cutoff (transition band)
+     * @param {Float32Array} taps - channel FIR, unity passband gain; Σh² sets the audio noise power
+     */
+    setChannel(cutoffHz, guardHz, taps) {
+        this.cutoff = cutoffHz;
+        this.guard = guardHz;
+        let s = 0.0;
+        for (let i = 0; i < taps.length; i++) s += taps[i] * taps[i];
+        this.sumH2 = s;
+        this._buildMask();
+    }
+
+    _buildMask() {
+        const N = this.N;
+        const binHz = this.sampleRate / N;
+        const lo = this.cutoff + this.guard + 2 * binHz;   // Hann main lobe is ±2 bins
+        const hi = Math.min(0.4 * this.sampleRate, 4000);
+        let used = 0;
+        for (let k = 0; k < N; k++) {
+            const f = Math.abs((k < N / 2 ? k : k - N) * binHz);
+            const on = f >= lo && f <= hi ? 1 : 0;
+            this.useBin[k] = on;
+            used += on;
+        }
+        this.nUsed = used;
+    }
+
+    /** Next frame starts empty and its estimate is taken as is. The last value stays readable. */
+    reset() {
+        this.fill = 0;
+        this.frames = 0;
+    }
+
+    /** Complex variance per sample at the channel rate (full-scale units²). */
+    get sigma2() { return Math.exp(this.logSigma2); }
+    /** Noise power of the real, channel-filtered audio (pre-AGC). */
+    get noisePower() { return this.valid ? Math.exp(this.logSigma2) * this.sumH2 * 0.5 : 0.0; }
+    get noiseRms() { return Math.sqrt(this.noisePower); }
+
+    /** Pre-channel complex baseband, n samples at the channel rate. */
+    process(bi, bq, n) {
+        const N = this.N;
+        let fill = this.fill;
+        for (let i = 0; i < n; i++) {
+            this.bufI[fill] = bi[i];
+            this.bufQ[fill] = bq[i];
+            if (++fill === N) {
+                fill = 0;
+                this._frame();
+            }
+        }
+        this.fill = fill;
+    }
+
+    _frame() {
+        const N = this.N;
+        const re = this.re, im = this.im, win = this.win, rev = this.bitrev;
+        if (this.nUsed < 8) return;
+        for (let i = 0; i < N; i++) {
+            const j = rev[i];
+            re[j] = this.bufI[i] * win[i];
+            im[j] = this.bufQ[i] * win[i];
+        }
+        const cosT = this.cosT, sinT = this.sinT;
+        for (let size = 2; size <= N; size <<= 1) {
+            const half = size >> 1;
+            const step = N / size;
+            for (let s = 0; s < N; s += size) {
+                for (let k = 0, t = 0; k < half; k++, t += step) {
+                    const a = s + k, b = a + half;
+                    const wr = cosT[t], wi = -sinT[t];
+                    const tr = wr * re[b] - wi * im[b];
+                    const ti = wr * im[b] + wi * re[b];
+                    re[b] = re[a] - tr;
+                    im[b] = im[a] - ti;
+                    re[a] += tr;
+                    im[a] += ti;
+                }
+            }
+        }
+        const sel = this.sel, use = this.useBin;
+        let m = 0;
+        for (let k = 0; k < N; k++) if (use[k]) sel[m++] = re[k] * re[k] + im[k] * im[k];
+        let med = quickselect(sel, m, m >> 1);
+        if (!(med > 1e-30)) med = 1e-30;
+        const x = Math.log(med * this.medianScale);
+        this.frames++;
+        const a = Math.max(this.alphaMin, 1.0 / this.frames);
+        this.logSigma2 += a * (x - this.logSigma2);   // a = 1 on the first frame
+        this.valid = true;
+    }
+}
+
+/** k-th smallest of a[0..n-1], in place (Hoare selection). */
+function quickselect(a, n, k) {
+    let lo = 0, hi = n - 1;
+    while (hi > lo) {
+        const pivot = a[(lo + hi) >> 1];
+        let i = lo, j = hi;
+        while (i <= j) {
+            while (a[i] < pivot) i++;
+            while (a[j] > pivot) j--;
+            if (i <= j) {
+                const t = a[i]; a[i] = a[j]; a[j] = t;
+                i++; j--;
+            }
+        }
+        if (k <= j) hi = j;
+        else if (k >= i) lo = i;
+        else break;
+    }
+    return a[k];
+}
+
+if (typeof module !== 'undefined') {
+    module.exports = { AGC, ChannelNoiseEstimator, NOISE_FLOOR_K };
+}

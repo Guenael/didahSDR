@@ -4,6 +4,9 @@
  * Includes window functions and STFT overlap helper.
  */
 
+/** Window names accepted by initWindow(). 'bh4' is the default; 'flattop' is forced by the CW filter. */
+const FFT_WINDOWS = ['bh4', 'blackman', 'hann', 'hamming', 'rect', 'flattop'];
+
 class DidahFFT {
     constructor(size = 2048) {
         this.size = size;
@@ -54,7 +57,7 @@ class DidahFFT {
     }
 
     initWindow(name = 'bh4') {
-        const known = name === 'flattop' || name === 'blackman' || name === 'hann' || name === 'bh4';
+        const known = FFT_WINDOWS.indexOf(name) >= 0;
         this.windowName = known ? name : 'bh4';
         const n = this.size;
         this.window = new Float32Array(n);
@@ -77,6 +80,12 @@ class DidahFFT {
             for (let i = 0; i < n; i++) {
                 this.window[i] = 0.5 * (1.0 - Math.cos((2.0 * Math.PI * i) / (n - 1)));
             }
+        } else if (this.windowName === 'hamming') {
+            for (let i = 0; i < n; i++) {
+                this.window[i] = 0.54 - 0.46 * Math.cos((2.0 * Math.PI * i) / (n - 1));
+            }
+        } else if (this.windowName === 'rect') {
+            this.window.fill(1.0);
         } else {
             // 4-term Blackman-Harris. Used when the CW filter is off (voice and other wide signals).
             const a0 = 0.35875, a1 = 0.48829, a2 = 0.14128, a3 = 0.01168;
@@ -204,4 +213,5 @@ class DidahFFT {
     }
 }
 
+DidahFFT.WINDOWS = FFT_WINDOWS;
 if (typeof module !== 'undefined') module.exports = DidahFFT;

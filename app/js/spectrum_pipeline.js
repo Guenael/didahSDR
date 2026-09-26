@@ -7,7 +7,8 @@
  *
  * DOM-free, so Node tests can drive it. `ctx` needs: state, demodulator, audioPlayer, cwRecorder,
  * cwDecoder, clientFft, cwFilter, waterfall, smeter, qrss, and the functions isLocalTx(),
- * updateTrxLeds(); `ctx.isHidden()` (a hidden tab skips the FFT) is optional.
+ * updateTrxLeds(); `ctx.isHidden()` (a hidden tab skips the FFT) and `ctx.audioRecorder`
+ * (bottom-bar REC) are optional.
  * No allocations per packet.
  */
 
@@ -17,6 +18,7 @@ const MAX_SPECTRUM_COLS = 200;
 
 function createSpectrumPipeline(ctx) {
     const { state, demodulator, audioPlayer, cwRecorder, cwDecoder, clientFft, cwFilter, waterfall, smeter, qrss } = ctx;
+    const audioRecorder = ctx.audioRecorder || null;
     const isHidden = ctx.isHidden || (() => typeof document !== 'undefined' && document.hidden);
     const RING_SIZE = SPECTRUM_RING_SIZE;
     const ringReal = new Float32Array(RING_SIZE);
@@ -34,6 +36,14 @@ function createSpectrumPipeline(ctx) {
         if (qrss.fftSize !== size) qrss.setFftSize(size);
         qrss.setHop(size >> 2);
         qrssPlanSpeed = state.speedMultiplier;
+        if (state.qrssEnabled && qrss.outRate > 0) {
+            waterfall.setQrssOverlay({ colSec: qrss.hop / qrss.outRate, windowSec: qrss.fftSize / qrss.outRate });
+        }
+    }
+
+    /** QRSS band centre: the dial in CW, dial + passband centre in USB/LSB (where the NCO puts it). */
+    function qrssCenter() {
+        return qrssCenterFreq(state.tunedFreq, state.modulation);
     }
 
     function resetRing() {
@@ -60,6 +70,7 @@ function createSpectrumPipeline(ctx) {
         const numComplex = nComplex == null ? (iq.length >> 1) : nComplex | 0;
         const audio = demodulator.process(iq, numComplex);
         cwRecorder.pushAudio(audio);
+        if (audioRecorder && audioRecorder.recording) audioRecorder.pushAudio(audio, demodulator.audioRate);
         audioPlayer.pushFloatAudio(audio);
 
         for (let i = 0; i < numComplex; i++) {
@@ -116,8 +127,9 @@ function createSpectrumPipeline(ctx) {
         // No CW filter here: its per-bin IIR smooths across columns (seconds apart in QRSS) and its
         // sharpening kernel is sized for wideband bins, not 0.1 Hz ones.
         waterfall.addSlice(spec);
+        const centre = qrssCenter();
         smeter.updateFromSpectrum(
-            qrss.fft.mag2Buffer, qrss.outRate, state.tunedFreq, state.tunedFreq,
+            qrss.fft.mag2Buffer, qrss.outRate, centre, centre,
             state.modulation, state.cwBandwidth, qrss.fft.enbw, qrss.hop
         );
     }
@@ -137,7 +149,7 @@ function createSpectrumPipeline(ctx) {
         applyQrssPlan();
         waterfall.zoom = qrss.viewZoom();
         waterfall.panOffset = 0;
-        waterfall.setCenterFreq(state.tunedFreq, qrss.outRate || 375);
+        waterfall.setCenterFreq(qrssCenter(), qrss.outRate || 375);
         waterfall.setTunedFreq(state.tunedFreq, state.lowCut, state.highCut, state.modulation);
     }
 
@@ -154,6 +166,7 @@ function createSpectrumPipeline(ctx) {
             waterfall.clear();
         } else {
             demodulator.qrssPush = null;
+            waterfall.setQrssOverlay(null);
             qrss.reset();
             if (qrssSavedView) {
                 waterfall.zoom = qrssSavedView.zoom;
@@ -179,7 +192,7 @@ function createSpectrumPipeline(ctx) {
 
     return {
         processRawIQ, resetIqPipeline, applyQrssView, setQrssEnabled, onFftSizeChanged, forgetTx,
-        spectrumHopSize,
+        spectrumHopSize, qrssCenter,
         /** For tests: complex samples waiting in the STFT ring. */
         get samplesAvailable() { return samplesAvailable; }
     };

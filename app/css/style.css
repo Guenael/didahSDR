@@ -1586,3 +1586,325 @@ kbd {
     font-size: 9px;
     color: var(--text-muted);
 }
+
+/* ---- Bottom-bar audio REC ---------------------------------------------------------------- */
+.audio-rec-btn {
+    min-width: 58px;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-weight: 700;
+}
+.audio-rec-btn:disabled, .icon-btn:disabled { opacity: 0.4; cursor: default; }
+.audio-rec-btn.recording {
+    color: #1a1204;
+    background: #f5c518;
+    border-color: #f5c518;
+}
+.icon-btn {
+    padding: 4px 7px;
+    justify-content: center;
+}
+.icon-btn:hover:not(:disabled), .audio-rec-btn:hover:not(:disabled):not(.recording) {
+    color: var(--text-main);
+    border-color: #4a5260;
+}
+
+/* ==========================================================================
+   QRSS CAPTION CARD (waterfall.js initQrssBox; shown only while QRSS is on)
+   Bottom-left overprint: title, UTC, bottom-edge frequency, tick interval.
+   Sits above the 11 px elapsed-time ticks and never takes the mouse.
+   ========================================================================== */
+.wf-qrss-card {
+    position: absolute;
+    left: 12px;
+    bottom: 20px;
+    z-index: 2;
+    min-width: 188px;
+    padding: 7px 11px 8px 12px;
+    pointer-events: none;
+    user-select: none;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.45;
+    color: #1e232b;
+    background: linear-gradient(180deg, rgba(246, 247, 249, 0.93) 0%, rgba(222, 226, 232, 0.93) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.7);
+    border-left: 3px solid var(--accent-blue);
+    border-radius: 5px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45), 0 1px 0 rgba(255, 255, 255, 0.5) inset;
+}
+
+.wf-qrss-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.wf-qrss-title {
+    font-family: var(--font-ui);
+    font-size: 15px;
+    font-weight: 300;
+    letter-spacing: 0.3px;
+    color: #2a303a;
+}
+
+.wf-qrss-title b {
+    font-weight: 700;
+    color: #1d5f96;
+}
+
+.wf-qrss-badge {
+    padding: 1px 6px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: #f6f7f9;
+    background: #2a303a;
+    border-radius: 3px;
+}
+
+.wf-qrss-rule {
+    height: 1px;
+    margin: 4px 0 5px;
+    background: linear-gradient(90deg, var(--accent-blue), rgba(97, 175, 239, 0) 85%);
+}
+
+.wf-qrss-row {
+    display: flex;
+    gap: 10px;
+    white-space: nowrap;
+}
+
+.wf-qrss-key {
+    width: 32px;
+    font-size: 9px;
+    line-height: 16px;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: #6a7382;
+}
+
+.wf-qrss-val {
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: #14181f;
+}
+
+/* ---------- Macro bar (F1-F4, macros.js), OPERATOR config and logbook (logbook.js) ---------- */
+.control-row-macro {
+    flex-wrap: nowrap;
+    gap: 10px;
+}
+
+.control-row-macro.is-dimmed {
+    opacity: 0.55;
+}
+
+.macro-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+.macro-spacer {
+    flex: 1 1 auto;
+}
+
+.macro-caller.tx-text-input {
+    flex: 0 0 132px;
+    min-width: 0;
+    height: 28px;
+}
+
+.macro-caller.is-flash {
+    animation: macro-caller-flash 0.7s ease;
+}
+
+@keyframes macro-caller-flash {
+    0%, 50% { border-color: var(--accent-red); box-shadow: 0 0 8px rgba(224, 108, 117, 0.8); }
+    100% { border-color: var(--border-color); box-shadow: none; }
+}
+
+.macro-btn {
+    min-width: 76px;
+    justify-content: center;
+    font-family: var(--font-mono);
+}
+
+.macro-btn:hover:not(:disabled),
+.macro-nr-btn:hover,
+.macro-log-btn:hover {
+    border-color: var(--accent-blue);
+    color: var(--text-main);
+}
+
+.macro-btn:disabled {
+    cursor: not-allowed;
+}
+
+.macro-nr-btn {
+    padding: 5px 8px;
+    font-family: var(--font-mono);
+}
+
+.macro-nr {
+    min-width: 40px;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--accent-cyan);
+}
+
+.macro-log-btn {
+    padding: 3px 8px;
+    font-size: 15px;
+}
+
+.wconfig-body .control-group .operator-input {
+    flex: 1 1 auto;
+    height: 26px;
+    min-width: 0;
+    user-select: text;
+}
+
+.macro-editor-window {
+    width: 620px;
+    max-width: calc(100vw - 24px);
+}
+
+.macro-editor-body {
+    gap: 8px;
+}
+
+.macro-ed-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 60vh;
+    overflow: auto;
+}
+
+.macro-ed-title {
+    margin-bottom: 3px;
+    color: var(--accent-gold);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+.macro-ed-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 3px;
+}
+
+.macro-ed-key {
+    flex: 0 0 18px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+}
+
+.logbook-edit.macro-ed-label {
+    flex: 0 0 58px;
+    width: 58px;
+    min-width: 0;
+}
+
+.logbook-edit.macro-ed-text {
+    flex: 1 1 auto;
+}
+
+.macro-ed-flag {
+    flex: 0 0 26px;
+    color: var(--accent-cyan);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+}
+
+.logbook-window {
+    width: 640px;
+    max-width: calc(100vw - 24px);
+}
+
+.logbook-body {
+    gap: 8px;
+}
+
+.logbook-scroll {
+    max-height: 320px;
+    overflow: auto;
+}
+
+.logbook-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+
+.logbook-table th {
+    position: sticky;
+    top: 0;
+    background: var(--bg-panel);
+    color: var(--accent-gold);
+    font-size: 10px;
+    font-weight: 700;
+    text-align: left;
+    padding: 3px 4px;
+    border-bottom: 1px solid var(--border-color);
+    white-space: nowrap;
+}
+
+.logbook-table td {
+    padding: 2px 4px;
+    border-bottom: 1px solid var(--bg-subpanel);
+    color: var(--text-main);
+    white-space: nowrap;
+}
+
+.logbook-call {
+    color: var(--accent-cyan);
+    font-weight: 700;
+}
+
+.logbook-freq {
+    text-align: right;
+}
+
+.logbook-edit {
+    width: 100%;
+    min-width: 44px;
+    background: var(--bg-subpanel);
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    color: var(--text-main);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 1px 4px;
+    text-transform: uppercase;
+    user-select: text;
+}
+
+.logbook-edit:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+}
+
+.logbook-footer {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.logbook-count {
+    flex: 1 1 auto;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+}

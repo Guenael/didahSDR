@@ -11,6 +11,9 @@
  * longer selected (or from an older start() generation) is dropped.
  */
 
+/** The replay source starts this far above its centre (the sample recordings have a signal there). */
+const REPLAY_START_OFFSET_HZ = 2800;
+
 function createSourceManager(ctx) {
     const { state, waterfall, valueDial } = ctx;
     const T = ctx.transports = { conn: null, kiwi: null, sound: null, ic7300: null, rtl: null };
@@ -45,20 +48,30 @@ function createSourceManager(ctx) {
 
     T.conn = new DidahConnection({
         onStatusChange: (statusText, isConnected) => {
+            if (!isConnected && ctx.txPump) ctx.txPump.abort();
             if (src().protocol !== 'didah') return;
             setStatus(statusText, isConnected);
         },
-        onConfig: (cfg) => {
+        onReady: (info) => {
             if (src().protocol !== 'didah') return;
-            if (cfg.center_freq) state.centerFreq = cfg.center_freq;
-            if (cfg.samp_rate) ctx.applyIqRate(cfg.samp_rate);
-            if (cfg.start_freq && !state.userHasTuned) {
-                state.tunedFreq = cfg.start_freq;
+            adopt(info.sampleRate, info.centerFreq);
+            if (!state.userHasTuned) {
+                state.tunedFreq = info.centerFreq + REPLAY_START_OFFSET_HZ;
                 valueDial.setValue(state.tunedFreq, false);
             }
-            if (cfg.start_mod) ctx.setModulation(cfg.start_mod);
-            waterfall.setCenterFreq(state.centerFreq, state.sampleRate);
+            if (ctx.txPump) ctx.txPump.setSampleRate(info.sampleRate);
             finishReady();
+        },
+        onCenterApplied: (hz) => {
+            if (src().protocol === 'didah') ctx.applyCenter(hz);
+        },
+        onTelemetry: (st) => {
+            if (src().protocol !== 'didah') return;
+            // STATUS comes at 10 Hz while transmitting: show the forward power and SWR there.
+            const tx = (st.flags & PROTO.STATUS_FLAG.TX) !== 0;
+            if (tx) setStatus(`TX ${(st.fwdMw / 1000).toFixed(1)} W · SWR ${st.swr.toFixed(2)}`, true);
+            else if (T.conn.lastTx) setStatus('Connected', true);
+            T.conn.lastTx = tx;
         },
         onRawIQ: (iq, n) => {
             if (!acceptIq(src().protocol, 'didah', T.conn.connected, null, null)) return;
@@ -280,8 +293,14 @@ function createSourceManager(ctx) {
         return !!(owner && owner.connected);
     }
 
-    function connectActive(allowUsbPicker) {
-        entry(src().protocol).connect(allowUsbPicker);
+    /** Kiwi never autostarts (select, restore, power): only its Connect button / Enter opens the socket. */
+    function connectActive(allowUsbPicker, kiwiRequested) {
+        const p = src().protocol;
+        if (p === 'kiwi' && !kiwiRequested) {
+            setStatus('Enter a KiwiSDR URL, then Connect', false);
+            return;
+        }
+        entry(p).connect(allowUsbPicker);
     }
 
     function disconnectTransports() {
@@ -298,8 +317,9 @@ function createSourceManager(ctx) {
         const parsed = normalizeKiwiUrl(urlEl ? urlEl.value : '');
         if (!parsed.ok) {
             if (urlEl) {
-                urlEl.classList.add('invalid');
-                urlEl.title = parsed.error;
+                // An empty box is not an error yet: it only shows the placeholder.
+                urlEl.classList.toggle('invalid', urlEl.value.trim() !== '');
+                urlEl.title = urlEl.value.trim() ? parsed.error : KIWI_PLACEHOLDER_URL;
             }
             return false;
         }
@@ -308,7 +328,7 @@ function createSourceManager(ctx) {
             urlEl.title = parsed.href;
             urlEl.value = parsed.href;
         }
-        const kiwiSrc = findSource('oh5ae');
+        const kiwiSrc = findSource('kiwisdr');
         kiwiSrc.host = parsed.host;
         kiwiSrc.port = parsed.port;
         kiwiSrc.secure = parsed.secure;
@@ -321,24 +341,23 @@ function createSourceManager(ctx) {
             setStatus('Invalid KiwiSDR URL', false);
             return;
         }
-        const radio = document.querySelector('input[name="iq-source"][value="oh5ae"]');
+        const radio = document.querySelector('input[name="iq-source"][value="kiwisdr"]');
         if (radio && !radio.checked) {
             radio.checked = true;
-            selectSource('oh5ae', true);
-            return;
+            selectSource('kiwisdr', true);
         }
         ctx.updateSourceStatus();
         if (!state.running) return;
-        const kiwiSrc = findSource('oh5ae');
+        const kiwiSrc = findSource('kiwisdr');
         setStatus(`Connecting to ${kiwiSrc.host}:${kiwiSrc.port}…`, false);
-        connectActive();
+        connectActive(false, true);
     }
 
     /** Level / range / FFT presets, applied the first time the operator picks a source (or on demand). */
     function applySourcePresets(s, force) {
         let seen;
         try { seen = JSON.parse(localStorage.getItem('didah_presets_seen') || '{}') || {}; } catch (e) { seen = {}; }
-        if (s.id === 'oh5ae' && seen.f4kiy && !seen.oh5ae) seen.oh5ae = 1;   // the Kiwi preset used to be F4KIY
+        if (s.id === 'kiwisdr' && (seen.f4kiy || seen.oh5ae)) seen.kiwisdr = 1;   // the Kiwi preset used to be F4KIY, then OH5AE
         if (!force && seen[s.id]) return;
         seen[s.id] = 1;
         try { localStorage.setItem('didah_presets_seen', JSON.stringify(seen)); } catch (e) { /* storage unavailable */ }
@@ -380,10 +399,9 @@ function createSourceManager(ctx) {
             ctx.releaseIc7300View();
             if (T.ic7300 && T.ic7300.cat.connected) T.ic7300.disconnectSerial();
         }
-        ctx.syncIc7300Key();
+        ctx.syncKeyLines();
         disconnectTransports();
         ctx.pipeline.resetIqPipeline();
-        ctx.resetDspControl();
         state.userHasTuned = false;
         const entryHz = next.protocol === 'kiwi'
             ? kiwiEntryFrequency({
@@ -403,13 +421,6 @@ function createSourceManager(ctx) {
         ctx.updateTopBarInfo();
         ctx.updateSourceStatus();
         if (!state.running) return;
-        if (next.protocol === 'kiwi') {
-            const urlEl = document.getElementById('kiwi-url');
-            if (urlEl && urlEl.classList.contains('invalid')) {
-                setStatus('Invalid KiwiSDR URL', false);
-                return;
-            }
-        }
         connectActive(fromUser);
     }
 
@@ -462,7 +473,7 @@ function createSourceManager(ctx) {
                 kiwiUrlEl.blur();
             });
         }
-        bindSourceCard('.source-option-kiwi', 'oh5ae', [kiwiUrlEl, kiwiConnectBtn]);
+        bindSourceCard('.source-option-kiwi', 'kiwisdr', [kiwiUrlEl, kiwiConnectBtn]);
         if (kiwiConnectBtn) {
             kiwiConnectBtn.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -519,7 +530,7 @@ function createSourceManager(ctx) {
             });
         }
         if (ic7300BaudSel) ic7300BaudSel.addEventListener('change', () => ensureIc7300().setBaud(parseInt(ic7300BaudSel.value, 10)));
-        if (ic7300WiringSel) ic7300WiringSel.addEventListener('change', () => ctx.syncIc7300Key());
+        if (ic7300WiringSel) ic7300WiringSel.addEventListener('change', () => ctx.syncKeyLines());
         if (ic7300SerialBtn) {
             ic7300SerialBtn.addEventListener('click', (e) => {
                 e.preventDefault();

@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { req } = require('./load.js');
 const { unpackKiwiSndIq, parseKiwiMsg, kiwiSndUrl, normalizeKiwiUrl, kiwiHostForUrl,
-        KiwiConnection, KIWI_EXAMPLE_URL, KIWI_DEFAULT_PORT } = req('kiwi.js');
+        KiwiConnection, KIWI_PLACEHOLDER_URL, KIWI_DEFAULT_PORT } = req('kiwi.js');
 const { findSource, SOURCES, kiwiEntryFrequency, KIWI_CW_HZ } = req('sources.js');
 
 function buildSndFrame({ i = 1000, q = -2000, n = 4, flags = 0x08, seq = 7, smeter = 800 }) {
@@ -24,13 +24,13 @@ function buildSndFrame({ i = 1000, q = -2000, n = 4, flags = 0x08, seq = 7, smet
     return buf;
 }
 
-test('catalog default is the replay server; kiwi live defaults to OH5AE on 40 m CW', () => {
+test('catalog default is the replay server; kiwi live has no default host, 40 m CW', () => {
     assert.equal(SOURCES[0].id, 'replay_server');
     assert.equal(SOURCES[0].label, 'Replay Server');
     assert.equal(SOURCES[0].protocol, 'didah');
-    const live = findSource('oh5ae');
+    const live = findSource('kiwisdr');
     assert.equal(live.protocol, 'kiwi');
-    assert.equal(live.host, 'oh5ae.dyndns.org');
+    assert.equal(live.host, '');
     assert.equal(live.port, 8073);
     assert.equal(live.secure, false);
     assert.equal(live.startFreq, 7018000);
@@ -53,12 +53,13 @@ test('kiwi entry keeps the previous HF dial and otherwise opens on 40 m CW', () 
 });
 
 test('normalizeKiwiUrl strips http(s), path, and whitespace then splits host/port', () => {
-    const example = normalizeKiwiUrl(KIWI_EXAMPLE_URL);
+    assert.equal(normalizeKiwiUrl(KIWI_PLACEHOLDER_URL).ok, false);
+    const example = normalizeKiwiUrl('http://kiwi.example.org:8073');
     assert.equal(example.ok, true);
-    assert.equal(example.host, 'oh5ae.dyndns.org');
+    assert.equal(example.host, 'kiwi.example.org');
     assert.equal(example.port, 8073);
     assert.equal(example.secure, false);
-    assert.equal(example.href, 'http://oh5ae.dyndns.org:8073');
+    assert.equal(example.href, 'http://kiwi.example.org:8073');
 
     const messy = normalizeKiwiUrl('  HTTP://F4KIY.DDNS.NET:8073/kiwi/?x=1  ');
     assert.equal(messy.ok, true);

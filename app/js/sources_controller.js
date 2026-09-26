@@ -11,7 +11,7 @@
  */
 
 const SOURCE_POLICY = {
-    didah: { followsDial: false, label: 'didah 0x03 IQ' },
+    didah: { followsDial: false, label: 'didahSDR v1 IQ' },
     kiwi: { followsDial: true, label: 'KiwiSDR SND IQ' },
     soundcard: { followsDial: false, label: 'Sound card IQ' },
     ic7300: { followsDial: false, label: 'IC-7300 IF' },

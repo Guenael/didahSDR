@@ -3,7 +3,9 @@
  *
  *   Autonotch (NLMS ANF)  : output = error   x − ŷ  (kills steady tones)
  *   Noise Reduction (ANR) : output = prediction ŷ   (keeps correlated CW/SSB)
- *   Squelch               : pre-AGC power meter + post-AGC soft gate
+ *   Squelch               : pre-AGC power meter + post-AGC soft gate. Threshold is relative to the
+ *                           channel noise power from ChannelNoiseEstimator (agc.js), read off the
+ *                           spectrum outside the passband, so a long carrier cannot raise it.
  *
  * No allocations after construction. process()/observe()/gate() skip work when disabled.
  */
@@ -246,16 +248,33 @@ class DidahSquelch {
         this.gain = 0.0;
         this.marginLin = 1.0;
         this.hysteresisLin = 1.0;
+        // Power detector time constant = max(1 ms, samplesPerBw / noise bandwidth): ~2·8 independent
+        // noise samples per window whatever the filter, so noise alone reads within ~±1 dB of N.
+        // 1 ms flat left a 150 Hz CW channel's noise swinging over 2 N, which a low margin cannot tell from a signal.
+        this.samplesPerBw = 8;
+        this.noiseBandwidth = 0;   // Hz, ENBW of the channel (0 = unknown, 1 ms detector)
         this.setSampleRate(sampleRate);
         this._recompute();
     }
 
     setSampleRate(rate) {
         this.sampleRate = Math.max(1000, rate);
-        this.powerCoeff = 1.0 - Math.exp(-1.0 / (this.sampleRate * 0.001));
+        this._detector();
         this.holdSamples = Math.max(1, Math.round(this.hangSec * this.sampleRate));
         this.fadeSamples = Math.max(1, Math.round(this.fadeSec * this.sampleRate));
         this.fadeStep = 1.0 / this.fadeSamples;
+    }
+
+    /** Channel noise bandwidth in Hz (Σh² · fs for a unity-gain FIR). Sets the power detector speed. */
+    setNoiseBandwidth(hz) {
+        this.noiseBandwidth = hz > 0 ? hz : 0;
+        this._detector();
+    }
+
+    _detector() {
+        let tau = 0.001;
+        if (this.noiseBandwidth > 0) tau = Math.max(tau, this.samplesPerBw / this.noiseBandwidth);
+        this.powerCoeff = 1.0 - Math.exp(-1.0 / (this.sampleRate * tau));
     }
 
     setHangForMode(mod) {
@@ -264,9 +283,9 @@ class DidahSquelch {
         this.holdSamples = Math.max(1, Math.round(this.hangSec * this.sampleRate));
     }
 
-    /** Open when pre-AGC power is this many dB above the AGC noise floor (0–40). */
+    /** Open when (S+N)/N of the pre-AGC channel audio reaches this many dB (0–30), as on the SNR meter. */
     setMarginDb(db) {
-        this.marginDb = Math.max(0, Math.min(40, db));
+        this.marginDb = Math.max(0, Math.min(30, db));
         this._recompute();
     }
 
@@ -285,20 +304,18 @@ class DidahSquelch {
 
     _recompute() {
         this.marginLin = Math.pow(10, this.marginDb / 10);
-        this.hysteresisLin = Math.pow(10, -this.hysteresisDb / 10);
+        // Below 12 dB the close point would sit at or under the noise itself and never be reached: halve instead.
+        this.hysteresisLin = Math.pow(10, -Math.min(this.hysteresisDb, this.marginDb / 2) / 10);
     }
 
     /**
-     * Track pre-AGC mean-square power against AGC envelope noiseFloor (amplitude).
-     * Open when power >= floor² · 10^(margin/10).
+     * Track pre-AGC mean-square power p against the channel noise power N (same units: audio²).
+     * Open when p >= N · 10^(margin/10), i.e. (S+N)/N >= margin; close min(6 dB, margin/2) lower, after the hang.
      */
-    observe(buf, n, noiseFloor) {
+    observe(buf, n, noisePower) {
         if (!this.enabled || n <= 0) return;
-        const floorAmp = noiseFloor > 1e-7 ? noiseFloor : 1e-7;
-        // noiseFloor is a mean absolute envelope. For Gaussian noise RMS² = (π/2) (E|x|)²,
-        // so the margin is decibels above the noise RMS rather than above the envelope.
-        const rms2 = floorAmp * floorAmp * (Math.PI / 2);
-        const openLin = rms2 * this.marginLin;
+        // No estimate yet (0): stay shut rather than open on everything.
+        const openLin = noisePower > 0 ? Math.max(noisePower, 1e-14) * this.marginLin : Infinity;
         const closeLin = openLin * this.hysteresisLin;
         const c = this.powerCoeff;
         const hold = this.holdSamples;

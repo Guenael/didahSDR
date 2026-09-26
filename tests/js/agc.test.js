@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadSampleWav, floatIq, peakAbs } = require('./load.js');
+const { loadSampleWav, floatIq, peakAbs, gaussSource } = require('./load.js');
 
 const RATE = 96000;
 
@@ -52,6 +52,61 @@ test('noise floor estimate holds still during a keyed transmission (no slow swel
     runCollect(iq, 4800, (d, t) => { if (t >= 2.5) floors.push(d.agc.noiseFloor); });
     const ratio = Math.max(...floors) / Math.min(...floors);
     assert.ok(ratio < 2.0, `floor wandered by ${ratio.toFixed(2)}x after settling`);
+});
+
+/** Complex white noise (std `sig` per component) plus an optional carrier at the tuned offset; returns the demod. */
+function runNoise({ mod = 'cw', bw = 150, sig = 1e-2, packets = 240, carrier = null, each = null }) {
+    const g = gaussSource(1);
+    const d = new DidahDemodulator(RATE);
+    d.setModulation(mod);
+    if (mod === 'cw') d.setCwBandwidth(bw);
+    d.setOffsetFrequency(3000);
+    const n = 2400, iq = new Float32Array(2 * n), w = (2 * Math.PI * 3000) / RATE;
+    for (let p = 0; p < packets; p++) {
+        const a = carrier ? carrier(p) : 0;
+        for (let i = 0; i < n; i++) {
+            const k = p * n + i;
+            iq[2 * i] = a * Math.cos(w * k) + sig * g();
+            iq[2 * i + 1] = a * Math.sin(w * k) + sig * g();
+        }
+        const out = d.process(iq, n);
+        if (each) each(d, p, out);
+    }
+    return d;
+}
+
+test('noise estimator reads the audio noise power of the channel within 0.5 dB', () => {
+    for (const [mod, bw] of [['cw', 150], ['cw', 500], ['usb', 0]]) {
+        let sum = 0, cnt = 0, truth = 0;
+        runNoise({ mod, bw, packets: 120, each: (d, p) => {
+            // σ = 1e-2 per component at 96 kHz → complex variance 2σ² / decim at the channel rate
+            truth = ((2 * 1e-4) / d.decim) * d.noiseEst.sumH2 * 0.5;
+            if (p >= 40) { sum += d.noiseEst.noisePower; cnt++; }
+        } });
+        const errDb = 10 * Math.log10(sum / cnt / truth);
+        assert.ok(Math.abs(errDb) < 0.5, `${mod} ${bw}: estimate ${errDb.toFixed(2)} dB off`);
+    }
+});
+
+test('noise estimate moves < 1 dB while a strong carrier sits in the passband', () => {
+    const before = [], during = [];
+    // 60 dB above the noise in the channel, on from 2 s to 7 s
+    runNoise({ packets: 280, carrier: (p) => (p >= 80 && p < 280 ? 0.3 : 0), each: (d, p) => {
+        const db = 10 * Math.log10(d.noiseEst.noisePower);
+        if (p >= 20 && p < 80) before.push(db);
+        else if (p >= 80) during.push(db);
+    } });
+    const ref = before.reduce((a, b) => a + b) / before.length;
+    const dev = Math.max(...during.map((v) => Math.abs(v - ref)));
+    assert.ok(dev < 1.0, `estimate moved ${dev.toFixed(2)} dB under the carrier`);
+});
+
+test('AGC: pure-noise output level matches the old in-band floor estimator (CW 150 Hz)', () => {
+    // 0.1393 rms: the pre-ChannelNoiseEstimator AGC on this exact input (seed 1, σ = 1e-2, 2-6 s)
+    let s = 0, c = 0;
+    runNoise({ each: (d, p, out) => { if (p >= 80) { for (let i = 0; i < out.length; i++) s += out[i] * out[i]; c += out.length; } } });
+    const db = 20 * Math.log10(Math.sqrt(s / c) / 0.1393);
+    assert.ok(Math.abs(db) < 1.0, `noise output ${db.toFixed(2)} dB from the old level`);
 });
 
 test('sample WAV: the strongest CW signal is levelled near the AGC target', { skip: !loadSampleWav(0) && 'sample WAV not present' }, () => {
